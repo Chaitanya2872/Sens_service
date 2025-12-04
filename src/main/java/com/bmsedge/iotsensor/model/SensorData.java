@@ -16,9 +16,14 @@ public class SensorData {
     private Long id;
 
     private String deviceId;
-    private String type;              // IAQ / ODOR / ENERGY / PEOPLE_COUNT / TEMPERATURE / HUMIDITY / CO2 / PM25 / PM10 / TVOC / VOLTAGE / CURRENT / POWER_FACTOR / KWH / QUEUE_LENGTH
+
+    // Expanded type field to include odor sensor types
+    private String type;
+    // Existing: IAQ / ENERGY / PEOPLE_COUNT / TEMPERATURE / HUMIDITY / CO2 / PM25 / PM10 / TVOC / VOLTAGE / CURRENT / POWER_FACTOR / KWH / QUEUE_LENGTH
+    // New: ODOR_INDEX / NH3 / H2S / BATTERY
+
     private Double value;             // Sensor reading value
-    private String unit;              // Unit of measurement (°C, ppm, µg/m³, etc.)
+    private String unit;              // Unit of measurement (°C, ppm, µg/m³, %, index, etc.)
     private String status;            // NORMAL / WARNING / CRITICAL / OFFLINE
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -28,7 +33,7 @@ public class SensorData {
     private LocalDateTime timestamp;
 
     // Additional metadata
-    private String quality;           // For IAQ: excellent, good, moderate, poor, unhealthy
+    private String quality;           // For IAQ/ODOR: EXCELLENT / GOOD / MODERATE / POOR / SEVERE / UNHEALTHY
     private Double threshold;         // Alert threshold value
     private String metadata;          // JSON string for additional data
 

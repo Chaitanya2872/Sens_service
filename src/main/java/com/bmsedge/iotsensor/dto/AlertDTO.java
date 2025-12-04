@@ -29,4 +29,7 @@ public class AlertDTO {
     private String deviceId;
     private Double value;
     private String unit;
+
+
+
 }
