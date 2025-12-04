@@ -20,7 +20,9 @@ public class SensorDataDTO {
     private String status;
     private String quality;
     private Double threshold;
-    private LocalDateTime timestamp;
+
+    // FIXED: Accept timestamp as both String and LocalDateTime
+    private Object timestamp;  // Changed from LocalDateTime to Object
 
     // Location info
     private Long locationId;
@@ -47,4 +49,20 @@ public class SensorDataDTO {
 
     @JsonProperty("odorh2s_high_precision")
     private Double odorh2s_high_precision;
+
+    // Helper method to get timestamp as LocalDateTime
+    public LocalDateTime getTimestamp() {
+        if (timestamp instanceof LocalDateTime) {
+            return (LocalDateTime) timestamp;
+        } else if (timestamp instanceof String) {
+            // Will be parsed in service layer
+            return null;
+        }
+        return null;
+    }
+
+    // Helper method to set timestamp
+    public void setTimestamp(Object timestamp) {
+        this.timestamp = timestamp;
+    }
 }
