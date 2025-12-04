@@ -17,11 +17,55 @@ public class SensorController {
 
     private final SensorService sensorService;
 
-    // === POST FROM THINGSBOARD ===
+    // === POST FROM THINGSBOARD (Existing) ===
     @PostMapping("/data")
-    public ResponseEntity<SensorDataDTO> saveSensorData(@RequestBody SensorDataDTO dto) {
-        SensorDataDTO saved = sensorService.saveSensorData(dto);
-        return ResponseEntity.ok(saved);
+    public ResponseEntity<Map<String, Object>> saveSensorData(@RequestBody SensorDataDTO dto) {
+        try {
+            SensorDataDTO saved = sensorService.saveSensorData(dto);
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Sensor data saved successfully",
+                    "deviceId", saved.getDeviceId() != null ? saved.getDeviceId() : dto.getDevice(),
+                    "timestamp", saved.getTimestamp()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of(
+                    "success", false,
+                    "message", "Error saving sensor data: " + e.getMessage()
+            ));
+        }
+    }
+
+    // === NEW: GET ODOR SENSOR DATA ===
+    @GetMapping("/odor/device/{deviceId}")
+    public ResponseEntity<Map<String, Object>> getOdorSensorData(
+            @PathVariable String deviceId,
+            @RequestParam(defaultValue = "24") Integer hours) {
+        Map<String, Object> odorData = sensorService.getOdorSensorData(deviceId, hours);
+        return ResponseEntity.ok(odorData);
+    }
+
+    // === NEW: GET LATEST ODOR DATA FOR DEVICE ===
+    @GetMapping("/odor/device/{deviceId}/latest")
+    public ResponseEntity<Map<String, Object>> getLatestOdorData(@PathVariable String deviceId) {
+        Map<String, Object> latestData = sensorService.getLatestOdorData(deviceId);
+        return ResponseEntity.ok(latestData);
+    }
+
+    // === NEW: GET ODOR DATA BY LOCATION ===
+    @GetMapping("/odor/location/{locationId}")
+    public ResponseEntity<Map<String, Object>> getOdorDataByLocation(
+            @PathVariable Long locationId,
+            @RequestParam(defaultValue = "24") Integer hours) {
+        Map<String, Object> odorData = sensorService.getOdorDataByLocation(locationId, hours);
+        return ResponseEntity.ok(odorData);
+    }
+
+    // === NEW: GET ALL ODOR SENSORS STATUS ===
+    @GetMapping("/odor/status")
+    public ResponseEntity<List<Map<String, Object>>> getAllOdorSensorsStatus() {
+        List<Map<String, Object>> status = sensorService.getAllOdorSensorsStatus();
+        return ResponseEntity.ok(status);
     }
 
     // Get sensor data by device ID

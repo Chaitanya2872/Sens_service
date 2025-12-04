@@ -1,8 +1,10 @@
 package com.bmsedge.iotsensor.service;
 
 import com.bmsedge.iotsensor.dto.SensorDataDTO;
+import com.bmsedge.iotsensor.model.DeviceLocationMapping;
 import com.bmsedge.iotsensor.model.Location;
 import com.bmsedge.iotsensor.model.SensorData;
+import com.bmsedge.iotsensor.repository.DeviceLocationMappingRepository;
 import com.bmsedge.iotsensor.repository.LocationRepository;
 import com.bmsedge.iotsensor.repository.SensorRepository;
 import lombok.RequiredArgsConstructor;
@@ -11,9 +13,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -23,6 +26,7 @@ public class SensorService {
 
     private final SensorRepository sensorRepository;
     private final LocationRepository locationRepository;
+    private final DeviceLocationMappingRepository deviceLocationMappingRepository;
 
     // Save sensor data with location
     @Transactional
@@ -67,14 +71,10 @@ public class SensorService {
         log.info("Processing odor sensor data from device: {}", dto.getDevice());
 
         String deviceId = dto.getDevice();
-        LocalDateTime timestamp = parseTimestamp(String.valueOf(dto.getTimestamp()));
-        Location location = null;
+        LocalDateTime timestamp = parseTimestamp(dto.getTimestamp());
 
-        // Get location if provided
-        if (dto.getLocationId() != null) {
-            location = locationRepository.findById(dto.getLocationId())
-                    .orElse(null);
-        }
+        // Get location from device mapping
+        Location location = getLocationForDevice(deviceId);
 
         // Save Battery data
         if (dto.getOdorbattery() != null) {
@@ -133,6 +133,13 @@ public class SensorService {
                 .build();
     }
 
+    // Get location for device from mapping table
+    private Location getLocationForDevice(String deviceId) {
+        return deviceLocationMappingRepository.findByDeviceId(deviceId)
+                .map(DeviceLocationMapping::getLocation)
+                .orElse(null);
+    }
+
     // Helper method to save a single sensor reading
     private SensorData saveSingleReading(String deviceId, String type, Double value, String unit,
                                          String status, String quality, Location location,
@@ -149,6 +156,139 @@ public class SensorService {
                 .build();
 
         return sensorRepository.save(sensorData);
+    }
+
+    // === NEW: GET METHODS FOR ODOR DATA ===
+
+    public Map<String, Object> getOdorSensorData(String deviceId, Integer hours) {
+        LocalDateTime startTime = LocalDateTime.now().minusHours(hours);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", deviceId);
+        result.put("hours", hours);
+
+        // Get all odor-related data types
+        List<String> odorTypes = Arrays.asList("ODOR_INDEX", "NH3", "H2S", "TEMPERATURE", "HUMIDITY", "BATTERY");
+        Map<String, List<SensorDataDTO>> dataByType = new HashMap<>();
+
+        for (String type : odorTypes) {
+            List<SensorData> data = sensorRepository.findRecentByDeviceId(deviceId, startTime)
+                    .stream()
+                    .filter(d -> type.equals(d.getType()))
+                    .collect(Collectors.toList());
+
+            if (!data.isEmpty()) {
+                dataByType.put(type.toLowerCase(), data.stream()
+                        .map(this::convertToDTO)
+                        .collect(Collectors.toList()));
+            }
+        }
+
+        result.put("data", dataByType);
+        return result;
+    }
+
+    public Map<String, Object> getLatestOdorData(String deviceId) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("deviceId", deviceId);
+
+        List<String> odorTypes = Arrays.asList("ODOR_INDEX", "NH3", "H2S", "TEMPERATURE", "HUMIDITY", "BATTERY");
+        Map<String, SensorDataDTO> latestData = new HashMap<>();
+
+        for (String type : odorTypes) {
+            List<SensorData> data = sensorRepository.findByDeviceId(deviceId)
+                    .stream()
+                    .filter(d -> type.equals(d.getType()))
+                    .max(Comparator.comparing(SensorData::getTimestamp))
+                    .stream()
+                    .collect(Collectors.toList());
+
+            if (!data.isEmpty()) {
+                latestData.put(type.toLowerCase(), convertToDTO(data.get(0)));
+            }
+        }
+
+        result.put("latestReadings", latestData);
+
+        // Add location info
+        Location location = getLocationForDevice(deviceId);
+        if (location != null) {
+            Map<String, Object> locationInfo = new HashMap<>();
+            locationInfo.put("id", location.getId());
+            locationInfo.put("name", location.getName());
+            locationInfo.put("floor", location.getFloor());
+            locationInfo.put("zone", location.getZone());
+            result.put("location", locationInfo);
+        }
+
+        return result;
+    }
+
+    public Map<String, Object> getOdorDataByLocation(Long locationId, Integer hours) {
+        LocalDateTime startTime = LocalDateTime.now().minusHours(hours);
+
+        // Get all devices for this location
+        List<DeviceLocationMapping> devices = deviceLocationMappingRepository
+                .findActiveByLocationId(locationId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("locationId", locationId);
+        result.put("hours", hours);
+
+        List<Map<String, Object>> devicesData = new ArrayList<>();
+
+        for (DeviceLocationMapping mapping : devices) {
+            if ("ODOR_SENSOR".equals(mapping.getDeviceType())) {
+                Map<String, Object> deviceData = getOdorSensorData(mapping.getDeviceId(), hours);
+                devicesData.add(deviceData);
+            }
+        }
+
+        result.put("devices", devicesData);
+        return result;
+    }
+
+    public List<Map<String, Object>> getAllOdorSensorsStatus() {
+        List<DeviceLocationMapping> odorSensors = deviceLocationMappingRepository
+                .findActiveByDeviceType("ODOR_SENSOR");
+
+        List<Map<String, Object>> statusList = new ArrayList<>();
+
+        for (DeviceLocationMapping mapping : odorSensors) {
+            Map<String, Object> status = new HashMap<>();
+            status.put("deviceId", mapping.getDeviceId());
+            status.put("deviceType", mapping.getDeviceType());
+
+            // Get latest data
+            SensorData latestOdorIndex = sensorRepository.findByDeviceId(mapping.getDeviceId())
+                    .stream()
+                    .filter(d -> "ODOR_INDEX".equals(d.getType()))
+                    .max(Comparator.comparing(SensorData::getTimestamp))
+                    .orElse(null);
+
+            if (latestOdorIndex != null) {
+                status.put("odorIndex", latestOdorIndex.getValue());
+                status.put("status", latestOdorIndex.getStatus());
+                status.put("quality", latestOdorIndex.getQuality());
+                status.put("lastUpdate", latestOdorIndex.getTimestamp());
+            } else {
+                status.put("status", "OFFLINE");
+            }
+
+            // Add location info
+            if (mapping.getLocation() != null) {
+                Map<String, Object> locationInfo = new HashMap<>();
+                locationInfo.put("id", mapping.getLocation().getId());
+                locationInfo.put("name", mapping.getLocation().getName());
+                locationInfo.put("floor", mapping.getLocation().getFloor());
+                locationInfo.put("zone", mapping.getLocation().getZone());
+                status.put("location", locationInfo);
+            }
+
+            statusList.add(status);
+        }
+
+        return statusList;
     }
 
     // === Odor Calculation Methods ===
@@ -176,14 +316,14 @@ public class SensorService {
 
     // Status determination methods
     private String determineTemperatureStatus(double temp) {
-        if (temp < 15 || temp > 30) return "WARNING";
         if (temp < 10 || temp > 35) return "CRITICAL";
+        if (temp < 15 || temp > 30) return "WARNING";
         return "NORMAL";
     }
 
     private String determineHumidityStatus(double humidity) {
-        if (humidity < 30 || humidity > 70) return "WARNING";
         if (humidity < 20 || humidity > 80) return "CRITICAL";
+        if (humidity < 30 || humidity > 70) return "WARNING";
         return "NORMAL";
     }
 
@@ -231,21 +371,26 @@ public class SensorService {
     }
 
     // Parse timestamp from ThingsBoard format
-    private LocalDateTime parseTimestamp(String timestamp) {
-        if (timestamp == null) {
+    private LocalDateTime parseTimestamp(Object timestampObj) {
+        if (timestampObj == null) {
             return LocalDateTime.now();
         }
+
+        String timestamp = timestampObj.toString();
 
         try {
             // Try parsing HH:mm:ss format
             DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
-            return LocalDateTime.of(
-                    LocalDateTime.now().toLocalDate(),
-                    java.time.LocalTime.parse(timestamp, timeFormatter)
-            );
+            LocalTime time = LocalTime.parse(timestamp, timeFormatter);
+            return LocalDateTime.of(LocalDateTime.now().toLocalDate(), time);
         } catch (DateTimeParseException e) {
-            log.warn("Failed to parse timestamp: {}, using current time", timestamp);
-            return LocalDateTime.now();
+            try {
+                // Try parsing as ISO datetime
+                return LocalDateTime.parse(timestamp);
+            } catch (DateTimeParseException e2) {
+                log.warn("Failed to parse timestamp: {}, using current time", timestamp);
+                return LocalDateTime.now();
+            }
         }
     }
 
