@@ -12,6 +12,8 @@ public interface LocationRepository extends JpaRepository<Location, Long> {
 
     List<Location> findByType(String type);
 
+    List<Location> findAll();
+
     List<Location> findByFloor(Integer floor);
 
     List<Location> findByFloorAndZone(Integer floor, String zone);
