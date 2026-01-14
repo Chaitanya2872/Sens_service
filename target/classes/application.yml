@@ -3,9 +3,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:postgresql://dpg-d4nbbtruibrs7399fdv0-a.singapore-postgres.render.com:5432/iot_database_sens
-    username: chaitanaya
-    password: sbwnEeyxzntiSXkcNdPJ58OBoOxlzVVJ
+    url: jdbc:postgresql://45.79.122.134:5432/mydatabase
+    username: jack2872
+    password: Tester@4723$
     driver-class-name: org.postgresql.Driver
 
     hikari:

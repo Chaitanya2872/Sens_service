@@ -3,9 +3,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:postgresql://dpg-d4nbbtruibrs7399fdv0-a.singapore-postgres.render.com:5432/iot_database_sens
-    username: chaitanaya
-    password: sbwnEeyxzntiSXkcNdPJ58OBoOxlzVVJ
+    url: jdbc:postgresql://45.79.122.134:5432/mydatabase
+    username: jack2872
+    password: Tester@4723$
     driver-class-name: org.postgresql.Driver
 
     hikari:
@@ -30,6 +30,18 @@ spring:
   jackson:
     serialization:
       write-dates-as-timestamps: false
+
+#FIXED: Eureka configuration
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka-server:8761/eureka/  # FIXED: Use actual server IP
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true  # FIXED: Use IP instead of hostname
+    instance-id: ${spring.application.name}:${random.value}
+    # REMOVED hostname: localhost - let Eureka auto-detect
 
 logging:
   level:
