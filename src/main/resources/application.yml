@@ -2,6 +2,10 @@ server:
   port: 8085
 
 spring:
+
+  application:
+    name: IOT-SENSORS-SERVICE
+
   datasource:
     url: jdbc:postgresql://45.79.122.134:5432/mydatabase
     username: jack2872
