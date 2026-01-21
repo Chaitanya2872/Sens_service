@@ -840,18 +840,43 @@ public class CafeteriaDashboardService {
         try {
             LocalDateTime now = LocalDateTime.now();
 
+            // ✅ ADD: Log time zone information
+            log.info("🕐 Server Time Zone: {}", java.time.ZoneId.systemDefault());
+            log.info("🕐 Current Server Time: {}", now);
+            log.info("🕐 Requested Time Range: {} to {}", startTime, endTime);
+
             if (timeFilter.equals("daily")) {
                 LocalDateTime todayStart = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
                 startTime = todayStart;
                 endTime = now;
+                log.info("🕐 Adjusted Daily Range: {} to {}", startTime, endTime);
             }
 
             List<CafeteriaAnalytics> analytics = analyticsRepository.findByCafeteriaLocationAndTimeRange(
                     cafeteriaLocationId, startTime, endTime);
 
+            // ✅ ADD: Log data availability
+            log.info("📊 Raw analytics count: {}", analytics.size());
+
+            if (!analytics.isEmpty()) {
+                LocalDateTime earliestRecord = analytics.stream()
+                        .map(CafeteriaAnalytics::getTimestamp)
+                        .min(LocalDateTime::compareTo)
+                        .orElse(null);
+
+                LocalDateTime latestRecord = analytics.stream()
+                        .map(CafeteriaAnalytics::getTimestamp)
+                        .max(LocalDateTime::compareTo)
+                        .orElse(null);
+
+                log.info("📊 Data Range: {} to {}", earliestRecord, latestRecord);
+            }
+
             analytics = analytics.stream()
                     .filter(a -> !a.getTimestamp().isAfter(now))
                     .collect(Collectors.toList());
+
+            log.info("📊 After future filter: {} records", analytics.size());
 
             return aggregateEnhancedCounterCongestion(analytics, timeFilter);
         } catch (Exception e) {

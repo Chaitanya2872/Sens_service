@@ -27,6 +27,7 @@ spring:
       hibernate:
         format_sql: true
         jdbc:
+          time_zone: UTC
           lob:
             non_contextual_creation: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
