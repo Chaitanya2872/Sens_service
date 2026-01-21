@@ -356,19 +356,28 @@ public class CafeteriaDashboardController {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
 
-            // Calculate time range
-            if (timeRange == null) {
-                timeRange = switch (timeFilter) {
-                    case "weekly" -> 168;
-                    case "monthly" -> 720;
-                    default -> 24;
-                };
+            // ✅ FIXED: Use same time logic as other endpoints
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime startTime;
+
+            if ("daily".equals(timeFilter)) {
+                // Same logic as other daily endpoints - from 7 AM today
+                startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            } else {
+                if (timeRange == null) {
+                    timeRange = switch (timeFilter) {
+                        case "weekly" -> 168;
+                        case "monthly" -> 720;
+                        default -> 24;
+                    };
+                }
+                startTime = now.minusHours(timeRange);
             }
 
-            LocalDateTime startTime = LocalDateTime.now().minusHours(timeRange);
-            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime endTime = now;
 
-            // Get enhanced congestion data from service
+            log.info("📊 Enhanced congestion time range: {} to {}", startTime, endTime);
+
             List<EnhancedCounterCongestionDTO> congestionData =
                     dashboardService.getEnhancedCounterCongestionTrend(
                             location.getId(), startTime, endTime, timeFilter);
