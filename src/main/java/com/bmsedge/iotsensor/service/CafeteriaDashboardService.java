@@ -1147,6 +1147,8 @@ public class CafeteriaDashboardService {
         }
     }
 
+    //just for testing
+
     private int calculateTotalServedFromInCount(List<Object[]> timeline) {
         int totalServed = 0;
         Integer previous = null;
