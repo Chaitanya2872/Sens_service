@@ -292,6 +292,9 @@ ORDER BY fc.counterName
     /**
      * ✅ FIXED: Counter performance with counter ID included
      */
+    /**
+     * ✅ UPDATED: Counter performance with counter ID and MAX wait time
+     */
     @Query("""
     SELECT
       c.foodCounter.id,

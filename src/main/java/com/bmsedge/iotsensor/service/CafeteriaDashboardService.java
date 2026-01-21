@@ -60,61 +60,66 @@ public class CafeteriaDashboardService {
 
     private OccupancyStatusDTO getOccupancyStatus(Long cafeteriaLocationId) {
         try {
-            CafeteriaAnalytics healthyStationData = null;
+            // ✅ Get latest data for ALL counters
+            List<CafeteriaAnalytics> latestAnalytics = analyticsRepository.findLatestForAllCounters(cafeteriaLocationId);
 
-            try {
-                List<CafeteriaAnalytics> latestAnalytics = analyticsRepository.findLatestForAllCounters(cafeteriaLocationId);
-
-                healthyStationData = latestAnalytics.stream()
-                        .filter(a -> a.getFoodCounter() != null)
-                        .filter(a -> a.getFoodCounter().getCounterName() != null)
-                        .filter(a -> a.getFoodCounter().getCounterName().toLowerCase().contains("healthy station"))
-                        .findFirst()
-                        .orElse(null);
-
-                log.debug("Found Healthy Station counter data: {}", healthyStationData != null);
-            } catch (Exception e) {
-                log.warn("Error finding Healthy Station counter: {}", e.getMessage());
-            }
-
-            if (healthyStationData == null) {
-                log.info("Healthy Station counter not found, using cafeteria-level occupancy");
-                Optional<CafeteriaAnalytics> latest = analyticsRepository.findLatestByCafeteriaLocation(cafeteriaLocationId);
-                healthyStationData = latest.orElse(null);
-            }
-
-            if (healthyStationData == null) {
+            if (latestAnalytics.isEmpty()) {
                 log.warn("No occupancy data found for cafeteria location: {}", cafeteriaLocationId);
-                return OccupancyStatusDTO.builder()
-                        .currentOccupancy(0)
-                        .capacity(728)
-                        .occupancyPercentage(0.0)
-                        .congestionLevel("LOW")
-                        .timestamp(LocalDateTime.now())
-                        .build();
+                return buildEmptyOccupancyStatus();
             }
 
-            Integer occupancy = healthyStationData.getCurrentOccupancy() != null ? healthyStationData.getCurrentOccupancy() : 0;
-            Integer capacity = healthyStationData.getCapacity() != null ? healthyStationData.getCapacity() : 728;
-            Double percentage = capacity > 0 ? (occupancy * 100.0) / capacity : 0.0;
+            // ✅ SUM occupancy from all counters
+            int totalOccupancy = latestAnalytics.stream()
+                    .filter(a -> a.getFoodCounter() != null)  // Only counter-level data
+                    .mapToInt(a -> a.getCurrentOccupancy() != null ? a.getCurrentOccupancy() : 0)
+                    .sum();
+
+            log.info("✅ Total occupancy across all counters: {}", totalOccupancy);
+
+            // Get capacity from location or use default
+            CafeteriaLocation location = locationRepository.findById(cafeteriaLocationId).orElse(null);
+            Integer capacity = (location != null && location.getCapacity() != null)
+                    ? location.getCapacity()
+                    : 728;
+
+            // Calculate percentage
+            Double percentage = capacity > 0 ? (totalOccupancy * 100.0) / capacity : 0.0;
+
+            // Determine congestion level based on percentage
+            String congestionLevel;
+            if (percentage < 40) {
+                congestionLevel = "LOW";
+            } else if (percentage < 75) {
+                congestionLevel = "MEDIUM";
+            } else {
+                congestionLevel = "HIGH";
+            }
+
+            log.info("📊 Occupancy Status: {}/{} ({}%) - {}",
+                    totalOccupancy, capacity, String.format("%.1f", percentage), congestionLevel);
 
             return OccupancyStatusDTO.builder()
-                    .currentOccupancy(occupancy)
+                    .currentOccupancy(totalOccupancy)
                     .capacity(capacity)
                     .occupancyPercentage(percentage)
-                    .congestionLevel(healthyStationData.getCongestionLevel() != null ? healthyStationData.getCongestionLevel() : "LOW")
-                    .timestamp(healthyStationData.getTimestamp())
-                    .build();
-        } catch (Exception e) {
-            log.error("Error in getOccupancyStatus: {}", e.getMessage(), e);
-            return OccupancyStatusDTO.builder()
-                    .currentOccupancy(0)
-                    .capacity(728)
-                    .occupancyPercentage(0.0)
-                    .congestionLevel("LOW")
+                    .congestionLevel(congestionLevel)
                     .timestamp(LocalDateTime.now())
                     .build();
+
+        } catch (Exception e) {
+            log.error("Error in getOccupancyStatus: {}", e.getMessage(), e);
+            return buildEmptyOccupancyStatus();
         }
+    }
+
+    private OccupancyStatusDTO buildEmptyOccupancyStatus() {
+        return OccupancyStatusDTO.builder()
+                .currentOccupancy(0)
+                .capacity(728)
+                .occupancyPercentage(0.0)
+                .congestionLevel("LOW")
+                .timestamp(LocalDateTime.now())
+                .build();
     }
 
     private List<FlowDataDTO> getFlowData(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime, String timeFilter) {
@@ -316,7 +321,7 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ UPDATED: Get dwell time data for a specific counter with COALESCE
+     * ✅ UPDATED: Get dwell time data for a specific counter with proper inCount calculation
      */
     @Transactional(readOnly = true)
     public CounterDwellTimeResponseDTO getDwellTimeByCounter(
@@ -360,20 +365,18 @@ public class CafeteriaDashboardService {
             log.info("📊 Data quality for '{}' - avgDwell: {}, estWait: {}, manualWait: {} out of {}",
                     counterName, withAvgDwell, withEstWait, withManualWait, analytics.size());
 
-            // Detect primary field
-            String primaryField = "None";
-            if (withManualWait > withAvgDwell && withManualWait > withEstWait) {
-                primaryField = "manualWaitTime";
-            } else if (withAvgDwell > 0) {
-                primaryField = "avgDwellTime";
-            } else if (withEstWait > 0) {
-                primaryField = "estimatedWaitTime";
-            }
-            log.info("🎯 Counter '{}' primarily uses: {}", counterName, primaryField);
-
             // Calculate distribution and stats
             List<DwellTimeDataDTO> dwellTimeData = calculateDwellTimeDistributionWithFallback(analytics);
-            CounterStatsDTO stats = calculateCounterStatsWithFallback(analytics, counterName);
+
+            // ✅ UPDATED: Pass all required parameters (same as counter efficiency)
+            CounterStatsDTO stats = calculateCounterStatsWithFallback(
+                    analytics,
+                    counterName,
+                    counter.getId(),           // ✅ NEW: counterId
+                    location.getId(),          // ✅ NEW: cafeteriaLocationId
+                    startTime,                 // ✅ NEW: startTime
+                    endTime                    // ✅ NEW: endTime
+            );
 
             return CounterDwellTimeResponseDTO.builder()
                     .counterName(counterName)
@@ -394,6 +397,7 @@ public class CafeteriaDashboardService {
                             .minWaitTime(0)
                             .maxWaitTime(0)
                             .mostCommonWaitTime("No data")
+                            .peakQueueLength(0)
                             .build())
                     .timestamp(LocalDateTime.now())
                     .build();
@@ -481,16 +485,51 @@ public class CafeteriaDashboardService {
     /**
      * ✅ Calculate counter statistics with COALESCE
      */
-    private CounterStatsDTO calculateCounterStatsWithFallback(List<CafeteriaAnalytics> analytics, String counterName) {
+    /**
+     * ✅ UPDATED: Calculate counter statistics with inCount and peak queue
+     */
+    /**
+            * ✅ UPDATED: Calculate counter statistics using timeline query (same as counter efficiency)
+ */
+    /**
+     * ✅ UPDATED: Calculate counter statistics using timeline query (same as counter efficiency)
+     */
+    private CounterStatsDTO calculateCounterStatsWithFallback(
+            List<CafeteriaAnalytics> analytics,
+            String counterName,
+            Long counterId,
+            Long cafeteriaLocationId,
+            LocalDateTime startTime,
+            LocalDateTime endTime
+    ) {
         if (analytics.isEmpty()) {
             log.warn("No analytics data for counter: {}", counterName);
             return buildEmptyCounterStats();
         }
 
-        Integer totalVisitors = analytics.stream()
-                .mapToInt(a -> a.getInCount() != null ? a.getInCount() : 0)
-                .sum();
+        // ✅ SAME AS COUNTER EFFICIENCY: Get timeline data
+        List<Object[]> inCountTimeline = analyticsRepository.getCounterInCountTimeline(
+                cafeteriaLocationId,
+                counterId,
+                startTime,
+                endTime
+        );
 
+        // ✅ SAME AS COUNTER EFFICIENCY: Calculate total served using delta method
+        Integer totalVisitors = calculateTotalServedFromInCount(inCountTimeline);
+
+        log.info("✅ Counter '{}' - Total entries (inCount deltas): {}", counterName, totalVisitors);
+
+        // ✅ FIXED: Use currentOccupancy (actual people at counter) for peak queue
+        Integer peakQueue = analytics.stream()
+                .filter(a -> a.getCurrentOccupancy() != null)
+                .mapToInt(CafeteriaAnalytics::getCurrentOccupancy)
+                .max()
+                .orElse(0);
+
+        log.info("✅ Counter '{}' - Peak occupancy (currentOccupancy): {}", counterName, peakQueue);
+
+        // Existing time calculations (wait time logic)
         List<Double> validTimes = new ArrayList<>();
         int usedAvgDwell = 0, usedEstWait = 0, usedManualWait = 0;
 
@@ -523,7 +562,8 @@ public class CafeteriaDashboardService {
                     .avgWaitTime(0.0)
                     .minWaitTime(0)
                     .maxWaitTime(0)
-                    .mostCommonWaitTime("No wait time data available")
+                    .mostCommonWaitTime("Peak occupancy: " + peakQueue + " people")  // ✅ Changed label
+                    .peakQueueLength(peakQueue)
                     .build();
         }
 
@@ -542,26 +582,18 @@ public class CafeteriaDashboardService {
                 .max()
                 .orElse(0);
 
-        Map<Integer, Long> waitTimeCounts = validTimes.stream()
-                .collect(Collectors.groupingBy(
-                        d -> (int) Math.round(d),
-                        Collectors.counting()
-                ));
+        String mostCommonDisplay = "Peak occupancy: " + peakQueue + " people";  // ✅ Changed label
 
-        String mostCommonWaitTime = waitTimeCounts.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(e -> e.getKey() + " min (" + e.getValue() + " people)")
-                .orElse("No data");
-
-        log.info("✅ Counter '{}' stats: total={}, avg={}min, min={}min, max={}min",
-                counterName, totalVisitors, String.format("%.2f", avgWaitTime), minWaitTime, maxWaitTime);
+        log.info("✅ Counter '{}' stats: entries={}, avg={}min, min={}min, max={}min, peakOccupancy={}",
+                counterName, totalVisitors, String.format("%.2f", avgWaitTime), minWaitTime, maxWaitTime, peakQueue);
 
         return CounterStatsDTO.builder()
                 .totalVisitors(totalVisitors)
                 .avgWaitTime(Math.round(avgWaitTime * 100.0) / 100.0)
                 .minWaitTime(minWaitTime)
                 .maxWaitTime(maxWaitTime)
-                .mostCommonWaitTime(mostCommonWaitTime)
+                .mostCommonWaitTime(mostCommonDisplay)
+                .peakQueueLength(peakQueue)  // ✅ Now contains peak currentOccupancy
                 .build();
     }
 
@@ -571,7 +603,8 @@ public class CafeteriaDashboardService {
                 .avgWaitTime(0.0)
                 .minWaitTime(0)
                 .maxWaitTime(0)
-                .mostCommonWaitTime("No data")
+                .mostCommonWaitTime("Peak occupancy: 0 people")  // ✅ Changed label
+                .peakQueueLength(0)
                 .build();
     }
 
@@ -652,7 +685,11 @@ public class CafeteriaDashboardService {
         }
     }
 
-    private List<CounterCongestionTrendDTO> getCounterCongestionTrend(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime, String timeFilter) {
+    private List<CounterCongestionTrendDTO> getCounterCongestionTrend(
+            Long cafeteriaLocationId,
+            LocalDateTime startTime,
+            LocalDateTime endTime,
+            String timeFilter) {
         try {
             LocalDateTime now = LocalDateTime.now();
 
@@ -665,46 +702,76 @@ public class CafeteriaDashboardService {
             List<CafeteriaAnalytics> analytics = analyticsRepository.findByCafeteriaLocationAndTimeRange(
                     cafeteriaLocationId, startTime, endTime);
 
+            // ✅ Log raw data count
+            log.info("📊 Fetched {} analytics records for congestion trend (time: {} to {})",
+                    analytics.size(), startTime, endTime);
+
+            // ✅ Filter future data
             analytics = analytics.stream()
                     .filter(a -> !a.getTimestamp().isAfter(now))
                     .collect(Collectors.toList());
 
+            log.info("📊 After filtering future data: {} records remain", analytics.size());
+
+            // ✅ Check data quality
+            long withOccupancy = analytics.stream()
+                    .filter(a -> a.getCurrentOccupancy() != null && a.getCurrentOccupancy() > 0)
+                    .count();
+
+            log.info("📊 Records with occupancy data: {}/{}", withOccupancy, analytics.size());
+
+            if (analytics.isEmpty()) {
+                log.warn("⚠️ No analytics data available for congestion trend");
+                return new ArrayList<>();
+            }
+
             return aggregateCounterCongestion(analytics, timeFilter);
         } catch (Exception e) {
-            log.error("Error in getCounterCongestionTrend: {}", e.getMessage(), e);
+            log.error("❌ Error in getCounterCongestionTrend: {}", e.getMessage(), e);
             return new ArrayList<>();
         }
     }
+
+
+
 
     /**
      * ✅ UPDATED: Aggregate counter congestion using CURRENT_OCCUPANCY (MAX per hour)
      * Shows peak occupancy at each counter per time bucket
      */
+    /**
+     * ✅ FIXED: Aggregate counter congestion with better fallback logic
+     */
     private List<CounterCongestionTrendDTO> aggregateCounterCongestion(
             List<CafeteriaAnalytics> analytics,
             String timeFilter) {
 
-        // Group analytics by time bucket (hour, day, or month based on timeFilter)
+        if (analytics.isEmpty()) {
+            log.warn("⚠️ No analytics data available for congestion trend");
+            return new ArrayList<>();
+        }
+
+        // Group analytics by time bucket
         Map<String, List<CafeteriaAnalytics>> grouped = analytics.stream()
                 .collect(Collectors.groupingBy(a -> formatTimestamp(a.getTimestamp(), timeFilter)));
 
-        return grouped.entrySet().stream()
+        log.info("📊 Processing {} time buckets for congestion trend", grouped.size());
+
+        List<CounterCongestionTrendDTO> result = grouped.entrySet().stream()
                 .map(entry -> {
                     Map<String, Integer> counterQueues = new HashMap<>();
 
-                    // Get counter-specific data (where food_counter_id is NOT NULL)
+                    // Separate counter-specific and cafeteria-level data
                     List<CafeteriaAnalytics> counterData = entry.getValue().stream()
                             .filter(a -> a.getFoodCounter() != null)
                             .collect(Collectors.toList());
 
-                    // Get cafeteria-level data (where food_counter_id IS NULL)
                     List<CafeteriaAnalytics> cafeteriaData = entry.getValue().stream()
                             .filter(a -> a.getFoodCounter() == null)
                             .collect(Collectors.toList());
 
+                    // PRIORITY 1: Use counter-specific data if available
                     if (!counterData.isEmpty()) {
-                        // ✅ FIXED: Use current_occupancy (actual people at counter)
-                        //          Use MAX to show peak occupancy in this time bucket
                         counterQueues = counterData.stream()
                                 .collect(Collectors.groupingBy(
                                         a -> a.getFoodCounter().getCounterName(),
@@ -720,29 +787,49 @@ public class CafeteriaDashboardService {
                                         e -> e.getValue().get()
                                 ));
 
-                        log.debug("✅ Time: {} - Max occupancy per counter: {}", entry.getKey(), counterQueues);
+                        log.debug("✅ Time: {} - Found counter data for {} counters",
+                                entry.getKey(), counterQueues.size());
                     }
 
-                    // Fallback: If no counter-specific data, use cafeteria-level data
+                    // PRIORITY 2: Fallback to cafeteria-level data
                     if (counterQueues.isEmpty() && !cafeteriaData.isEmpty()) {
                         Optional<Integer> maxOccupancy = cafeteriaData.stream()
                                 .map(a -> a.getCurrentOccupancy() != null ? a.getCurrentOccupancy() : 0)
+                                .filter(o -> o > 0)
                                 .max(Integer::compare);
 
-                        if (maxOccupancy.isPresent() && maxOccupancy.get() > 0) {
-                            counterQueues.put("Cafeteria Level", maxOccupancy.get());
-                            log.debug("⚠️ Using cafeteria-level occupancy for time: {}", entry.getKey());
+                        if (maxOccupancy.isPresent()) {
+                            counterQueues.put("Cafeteria Overall", maxOccupancy.get());
+                            log.debug("⚠️ Time: {} - Using cafeteria-level data: {} occupancy",
+                                    entry.getKey(), maxOccupancy.get());
                         }
+                    }
+
+                    // PRIORITY 3: If still no data, log warning but include empty entry
+                    if (counterQueues.isEmpty()) {
+                        log.warn("⚠️ Time: {} - No occupancy data available (counter or cafeteria level)",
+                                entry.getKey());
+                        // Return empty map for this time bucket instead of filtering it out
                     }
 
                     return CounterCongestionTrendDTO.builder()
                             .timestamp(entry.getKey())
-                            .counterQueues(counterQueues)  // Now contains occupancy values
+                            .counterQueues(counterQueues)
                             .build();
                 })
-                .filter(dto -> !dto.getCounterQueues().isEmpty())  // Remove empty time buckets
                 .sorted(Comparator.comparing(CounterCongestionTrendDTO::getTimestamp))
                 .collect(Collectors.toList());
+
+        log.info("✅ Generated {} congestion trend records", result.size());
+
+        // Log sample of what we're returning
+        if (!result.isEmpty()) {
+            CounterCongestionTrendDTO sample = result.get(0);
+            log.info("📊 Sample record - Time: {}, Counters: {}",
+                    sample.getTimestamp(), sample.getCounterQueues().keySet());
+        }
+
+        return result;
     }
 
     public List<EnhancedCounterCongestionDTO> getEnhancedCounterCongestionTrend(
@@ -777,15 +864,35 @@ public class CafeteriaDashboardService {
      * ✅ FIXED: Return minute-level granular data with full statistics (max, avg, min, count)
      * Returns individual data points for each minute, not aggregated by hour
      */
+    /**
+     * ✅ FIXED: Enhanced congestion with better data handling
+     */
+    /**
+     * ✅ FIXED: Enhanced congestion with ALL counters included
+     */
+    /**
+     * ✅ FIXED: Return minute-level granular data with full statistics (max, avg, min, count)
+     * Returns individual data points for each minute, not aggregated by hour
+     * Only returns counter-specific data - NO cafeteria-level fallback
+     */
     private List<EnhancedCounterCongestionDTO> aggregateEnhancedCounterCongestion(
             List<CafeteriaAnalytics> analytics,
             String timeFilter) {
 
-        // Filter to only counter-specific data with occupancy
+        // ✅ STRICT FILTER: Only counter-specific data with occupancy
         List<CafeteriaAnalytics> counterData = analytics.stream()
-                .filter(a -> a.getFoodCounter() != null)
-                .filter(a -> a.getCurrentOccupancy() != null)
+                .filter(a -> a.getFoodCounter() != null)  // Must have a food counter
+                .filter(a -> a.getCurrentOccupancy() != null)  // Must have occupancy data
+                .filter(a -> a.getCurrentOccupancy() > 0)  // Must be non-zero
                 .collect(Collectors.toList());
+
+        log.info("📊 Filtered {} counter-specific records (from {} total)",
+                counterData.size(), analytics.size());
+
+        if (counterData.isEmpty()) {
+            log.warn("⚠️ No counter-specific data found! Returning empty list.");
+            return new ArrayList<>();
+        }
 
         // Group by minute-level timestamp and counter
         Map<String, Map<String, List<Integer>>> timeBuckets = new HashMap<>();
@@ -800,6 +907,8 @@ public class CafeteriaDashboardService {
                     .computeIfAbsent(counterName, k -> new ArrayList<>())
                     .add(occupancy);
         }
+
+        log.info("📊 Grouped into {} time buckets", timeBuckets.size());
 
         // Build enhanced DTOs for each minute
         List<EnhancedCounterCongestionDTO> result = new ArrayList<>();
@@ -840,6 +949,7 @@ public class CafeteriaDashboardService {
                     }
                 }
 
+                // ✅ Only add if we have counter stats (no "Cafeteria Overall" fallback)
                 if (!statsMap.isEmpty()) {
                     result.add(EnhancedCounterCongestionDTO.builder()
                             .timestamp(timeKey)
@@ -849,7 +959,7 @@ public class CafeteriaDashboardService {
             }
         }
 
-        log.info("Generated {} enhanced congestion time buckets (minute-level)", result.size());
+        log.info("✅ Generated {} enhanced congestion time buckets with counter-specific data", result.size());
         return result.stream()
                 .sorted(Comparator.comparing(EnhancedCounterCongestionDTO::getTimestamp))
                 .collect(Collectors.toList());
@@ -953,61 +1063,86 @@ public class CafeteriaDashboardService {
             LocalDateTime endTime
     ) {
         try {
+            log.info("📊 Fetching counter efficiency for cafeteria: {}, startTime: {}",
+                    cafeteriaLocationId, startTime);
+
             List<Object[]> performance =
                     analyticsRepository.getCounterPerformanceComparisonWithMax(
                             cafeteriaLocationId, startTime
                     );
 
+            log.info("📊 Query returned {} counter performance records", performance.size());
+
+            if (performance.isEmpty()) {
+                log.warn("⚠️ No counter performance data found for cafeteria: {}", cafeteriaLocationId);
+                return new ArrayList<>();
+            }
+
             return performance.stream()
                     .map(row -> {
-                        // ✅ FIXED: Correct field mapping
-                        Long counterId = ((Number) row[0]).longValue();        // row[0] = counter ID
-                        String counterName = (String) row[1];                  // row[1] = counter name
-                        Double avgQueue = ((Number) row[2]).doubleValue();     // row[2] = avg queue
-                        Double avgDwell = ((Number) row[3]).doubleValue();     // row[3] = avg dwell
-                        Double avgWait = ((Number) row[4]).doubleValue();      // row[4] = avg wait
-                        Double maxWait = ((Number) row[5]).doubleValue();      // row[5] = max wait
-                        Long totalServedFromQuery = ((Number) row[6]).longValue(); // row[6] = sum inCount
+                        try {
+                            // ✅ CORRECT FIELD MAPPING (with counter ID)
+                            Long counterId = ((Number) row[0]).longValue();        // row[0] = counter ID
+                            String counterName = (String) row[1];                  // row[1] = counter name
+                            Double avgQueue = row[2] != null ? ((Number) row[2]).doubleValue() : 0.0;     // row[2] = avg queue
+                            Double avgDwell = row[3] != null ? ((Number) row[3]).doubleValue() : 0.0;     // row[3] = avg dwell
+                            Double avgWait = row[4] != null ? ((Number) row[4]).doubleValue() : 0.0;      // row[4] = avg wait
+                            Double maxWait = row[5] != null ? ((Number) row[5]).doubleValue() : 0.0;      // row[5] = MAX wait ✅
+                            Long totalServedFromQuery = row[6] != null ? ((Number) row[6]).longValue() : 0L; // row[6] = sum inCount
 
-                        // Get timeline data for this counter
-                        List<Object[]> inCountTimeline =
-                                analyticsRepository.getCounterInCountTimeline(
-                                        cafeteriaLocationId,
-                                        counterId,
-                                        startTime,
-                                        endTime
-                                );
+                            log.debug("📊 Processing counter: {} (ID: {})", counterName, counterId);
 
-                        // Calculate total served from timeline
-                        int totalServed = calculateTotalServedFromInCount(inCountTimeline);
+                            // Get timeline data for this counter
+                            List<Object[]> inCountTimeline =
+                                    analyticsRepository.getCounterInCountTimeline(
+                                            cafeteriaLocationId,
+                                            counterId,
+                                            startTime,
+                                            endTime
+                                    );
 
-                        // Fallback to query sum if timeline calculation returns 0
-                        if (totalServed == 0 && totalServedFromQuery != null) {
-                            totalServed = totalServedFromQuery.intValue();
+                            log.debug("📊 Timeline has {} records for counter: {}",
+                                    inCountTimeline.size(), counterName);
+
+                            // Calculate total served from timeline
+                            int totalServed = calculateTotalServedFromInCount(inCountTimeline);
+
+                            // Fallback to query sum if timeline calculation returns 0
+                            if (totalServed == 0 && totalServedFromQuery != null && totalServedFromQuery > 0) {
+                                totalServed = totalServedFromQuery.intValue();
+                                log.debug("📊 Using query sum for counter '{}': {}", counterName, totalServed);
+                            }
+
+                            // Calculate efficiency
+                            Integer efficiency =
+                                    avgWait > 0
+                                            ? Math.min(100, (int) (100 / avgWait * 5))
+                                            : 100;
+
+                            log.info("✅ Counter: {} - Served: {}, AvgWait: {}min, PeakWait: {}min, Efficiency: {}%",
+                                    counterName, totalServed,
+                                    String.format("%.2f", avgWait),
+                                    String.format("%.2f", maxWait),
+                                    efficiency);
+
+                            return CounterEfficiencyDTO.builder()
+                                    .counterName(counterName)
+                                    .avgServiceTime(avgDwell)
+                                    .totalServed(totalServed)
+                                    .avgWaitTime(avgWait)
+                                    .peakWaitTime(maxWait)  // ✅ MAX wait time from query
+                                    .efficiency(efficiency)
+                                    .build();
+                        } catch (Exception e) {
+                            log.error("❌ Error processing counter efficiency row: {}", e.getMessage(), e);
+                            return null;
                         }
-
-                        // Calculate efficiency
-                        Integer efficiency =
-                                avgWait > 0
-                                        ? Math.min(100, (int) (100 / avgWait * 5))
-                                        : 100;
-
-                        log.debug("Counter: {} - Total Served: {}, Avg Wait: {}min, Efficiency: {}%",
-                                counterName, totalServed, String.format("%.2f", avgWait), efficiency);
-
-                        return CounterEfficiencyDTO.builder()
-                                .counterName(counterName)
-                                .avgServiceTime(avgDwell)
-                                .totalServed(totalServed)
-                                .avgWaitTime(avgWait)
-                                .peakWaitTime(maxWait)
-                                .efficiency(efficiency)
-                                .build();
                     })
+                    .filter(Objects::nonNull)  // Remove any null entries from errors
                     .collect(Collectors.toList());
 
         } catch (Exception e) {
-            log.error("Error in getCounterEfficiency: {}", e.getMessage(), e);
+            log.error("❌ Error in getCounterEfficiency: {}", e.getMessage(), e);
             return new ArrayList<>();
         }
     }
@@ -1044,39 +1179,94 @@ public class CafeteriaDashboardService {
             LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
             LocalDateTime now = LocalDateTime.now();
 
-            Long totalVisitors = analyticsRepository.getTotalVisitorsByInCount(cafeteriaLocationId, startOfDay, now);
+            // ✅ Get all counters for this cafeteria
+            List<FoodCounter> counters = counterRepository.findByCafeteriaLocationId(cafeteriaLocationId);
 
+            if (counters.isEmpty()) {
+                log.warn("No counters found for cafeteria location: {}", cafeteriaLocationId);
+                return buildEmptyTodaysVisitors();
+            }
+
+            // ✅ Calculate total visitors by summing deltas from ALL counters
+            int totalVisitorsToday = 0;
+            for (FoodCounter counter : counters) {
+                List<Object[]> timeline = analyticsRepository.getCounterInCountTimeline(
+                        cafeteriaLocationId,
+                        counter.getId(),
+                        startOfDay,
+                        now
+                );
+                int counterVisitors = calculateTotalServedFromInCount(timeline);
+                totalVisitorsToday += counterVisitors;
+
+                log.debug("Counter '{}': {} entries", counter.getCounterName(), counterVisitors);
+            }
+
+            log.info("✅ Total visitors today (all counters): {}", totalVisitorsToday);
+
+            // ✅ Calculate yesterday's visitors the same way
             LocalDateTime yesterdayStart = startOfDay.minusDays(1);
             LocalDateTime yesterdayEnd = now.minusDays(1);
-            Long yesterdayVisitors = analyticsRepository.getTotalVisitorsByInCount(cafeteriaLocationId, yesterdayStart, yesterdayEnd);
 
+            int totalVisitorsYesterday = 0;
+            for (FoodCounter counter : counters) {
+                List<Object[]> timeline = analyticsRepository.getCounterInCountTimeline(
+                        cafeteriaLocationId,
+                        counter.getId(),
+                        yesterdayStart,
+                        yesterdayEnd
+                );
+                totalVisitorsYesterday += calculateTotalServedFromInCount(timeline);
+            }
+
+            log.info("✅ Total visitors yesterday (all counters): {}", totalVisitorsYesterday);
+
+            // Calculate percentage change
             Double percentageChange = 0.0;
             String trend = "up";
-            if (yesterdayVisitors != null && yesterdayVisitors > 0) {
-                percentageChange = ((totalVisitors.doubleValue() - yesterdayVisitors) / yesterdayVisitors) * 100;
+            if (totalVisitorsYesterday > 0) {
+                percentageChange = ((totalVisitorsToday - totalVisitorsYesterday) * 100.0) / totalVisitorsYesterday;
                 trend = percentageChange >= 0 ? "up" : "down";
             }
 
+            // ✅ Calculate last hour visitors
             LocalDateTime lastHourStart = now.minusHours(1);
-            Long lastHourVisitors = analyticsRepository.getTotalVisitorsByInCount(cafeteriaLocationId, lastHourStart, now);
+
+            int totalVisitorsLastHour = 0;
+            for (FoodCounter counter : counters) {
+                List<Object[]> timeline = analyticsRepository.getCounterInCountTimeline(
+                        cafeteriaLocationId,
+                        counter.getId(),
+                        lastHourStart,
+                        now
+                );
+                totalVisitorsLastHour += calculateTotalServedFromInCount(timeline);
+            }
+
+            log.info("✅ Total visitors last hour (all counters): {}", totalVisitorsLastHour);
 
             return TodaysVisitorsDTO.builder()
-                    .total(totalVisitors != null ? totalVisitors.intValue() : 0)
+                    .total(totalVisitorsToday)
                     .sinceTime("7:00 AM")
-                    .lastHour(lastHourVisitors != null ? lastHourVisitors.intValue() : 0)
-                    .percentageChange(percentageChange)
+                    .lastHour(totalVisitorsLastHour)
+                    .percentageChange(Math.round(percentageChange * 100.0) / 100.0)
                     .trend(trend)
                     .build();
+
         } catch (Exception e) {
             log.error("Error in getTodaysVisitors: {}", e.getMessage(), e);
-            return TodaysVisitorsDTO.builder()
-                    .total(0)
-                    .sinceTime("7:00 AM")
-                    .lastHour(0)
-                    .percentageChange(0.0)
-                    .trend("up")
-                    .build();
+            return buildEmptyTodaysVisitors();
         }
+    }
+
+    private TodaysVisitorsDTO buildEmptyTodaysVisitors() {
+        return TodaysVisitorsDTO.builder()
+                .total(0)
+                .sinceTime("7:00 AM")
+                .lastHour(0)
+                .percentageChange(0.0)
+                .trend("up")
+                .build();
     }
 
     /**

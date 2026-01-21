@@ -17,12 +17,10 @@ import org.springframework.web.bind.annotation.*;
 import com.bmsedge.iotsensor.dto.CounterDwellTimeResponseDTO;
 
 import java.io.Serializable;
-import java.util.List;
+import java.util.*;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -72,6 +70,7 @@ public class CafeteriaDashboardController {
 
         return ResponseEntity.ok(dashboard);
     }
+
 
     /**
      * ✅ Get dwell time data for a specific counter
@@ -389,6 +388,100 @@ public class CafeteriaDashboardController {
                     "congestionTrend", new ArrayList<>()
             ));
         }
+    }
+
+    // Add to CafeteriaDashboardController.java
+
+    /**
+     * 🔍 DEBUG: Check congestion trend raw data
+     */
+    @GetMapping("/{tenantCode}/{cafeteriaCode}/debug/congestion")
+    public ResponseEntity<Map<String, Object>> debugCongestionTrend(
+            @PathVariable String tenantCode,
+            @PathVariable String cafeteriaCode,
+            @RequestParam(defaultValue = "daily") String timeFilter
+    ) {
+        try {
+            CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
+                    .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
+
+            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime endTime = LocalDateTime.now();
+
+            // Get raw analytics
+            List<CafeteriaAnalytics> analytics = analyticsRepository.findByCafeteriaLocationAndTimeRange(
+                    location.getId(), startTime, endTime);
+
+            // Analyze data structure
+            long totalRecords = analytics.size();
+            long withCounters = analytics.stream().filter(a -> a.getFoodCounter() != null).count();
+            long cafeteriaLevel = analytics.stream().filter(a -> a.getFoodCounter() == null).count();
+            long withOccupancy = analytics.stream()
+                    .filter(a -> a.getCurrentOccupancy() != null && a.getCurrentOccupancy() > 0)
+                    .count();
+
+            // Get unique counter names
+            List<String> counterNames = analytics.stream()
+                    .filter(a -> a.getFoodCounter() != null)
+                    .map(a -> a.getFoodCounter().getCounterName())
+                    .distinct()
+                    .collect(Collectors.toList());
+
+            // Sample data
+            List<Map<String, Object>> sampleRecords = analytics.stream()
+                    .limit(5)
+                    .map(a -> {
+                        Map<String, Object> record = new HashMap<>();
+                        record.put("id", a.getId());
+                        record.put("timestamp", a.getTimestamp().toString());
+                        record.put("counterName", a.getFoodCounter() != null ?
+                                a.getFoodCounter().getCounterName() : "CAFETERIA_LEVEL");
+                        record.put("currentOccupancy", a.getCurrentOccupancy());
+                        record.put("queueLength", a.getQueueLength());
+                        return record;
+                    })
+                    .collect(Collectors.toList());
+
+            // Time distribution
+            Map<String, Long> timeDistribution = analytics.stream()
+                    .collect(Collectors.groupingBy(
+                            a -> a.getTimestamp().getHour() + ":00",
+                            Collectors.counting()
+                    ));
+
+            return ResponseEntity.ok(Map.of(
+                    "totalRecords", totalRecords,
+                    "counterLevelRecords", withCounters,
+                    "cafeteriaLevelRecords", cafeteriaLevel,
+                    "recordsWithOccupancy", withOccupancy,
+                    "uniqueCounters", counterNames,
+                    "counterCount", counterNames.size(),
+                    "timeRange", Map.of("start", startTime.toString(), "end", endTime.toString()),
+                    "sampleRecords", sampleRecords,
+                    "timeDistribution", timeDistribution,
+                    "diagnosis", diagnoseCongestionIssue(totalRecords, withCounters, withOccupancy)
+            ));
+
+        } catch (Exception e) {
+            log.error("Debug congestion error: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", e.getMessage(),
+                    "stackTrace", Arrays.toString(e.getStackTrace())
+            ));
+        }
+    }
+
+    private String diagnoseCongestionIssue(long total, long withCounters, long withOccupancy) {
+        if (total == 0) {
+            return "❌ NO DATA - No analytics records found. Check MQTT connection.";
+        }
+        if (withOccupancy == 0) {
+            return "❌ NO OCCUPANCY DATA - Records exist but currentOccupancy is null/zero.";
+        }
+        if (withCounters == 0) {
+            return "⚠️ CAFETERIA-LEVEL ONLY - No counter-specific data. Will show 'Cafeteria Overall'.";
+        }
+        return "✅ DATA AVAILABLE - " + withCounters + " counter records, " + withOccupancy + " with occupancy.";
     }
 
     /**
