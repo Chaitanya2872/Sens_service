@@ -350,33 +350,15 @@ public class CafeteriaDashboardController {
             @RequestParam(defaultValue = "daily") String timeFilter,
             @RequestParam(required = false) Integer timeRange) {
 
-        log.info("Fetching enhanced congestion for {}/{}", tenantCode, cafeteriaCode);
-
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
 
-            // ✅ FIXED: Use same time logic as other endpoints
-            LocalDateTime now = LocalDateTime.now();
-            LocalDateTime startTime;
+            // ✅ SIMPLE FIX: Get ALL records from last 24 hours
+            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime startTime = endTime.minusHours(24);
 
-            if ("daily".equals(timeFilter)) {
-                // Same logic as other daily endpoints - from 7 AM today
-                startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
-            } else {
-                if (timeRange == null) {
-                    timeRange = switch (timeFilter) {
-                        case "weekly" -> 168;
-                        case "monthly" -> 720;
-                        default -> 24;
-                    };
-                }
-                startTime = now.minusHours(timeRange);
-            }
-
-            LocalDateTime endTime = now;
-
-            log.info("📊 Enhanced congestion time range: {} to {}", startTime, endTime);
+            log.info("📊 Fetching ALL data from last 24 hours: {} to {}", startTime, endTime);
 
             List<EnhancedCounterCongestionDTO> congestionData =
                     dashboardService.getEnhancedCounterCongestionTrend(
@@ -391,7 +373,7 @@ public class CafeteriaDashboardController {
             ));
 
         } catch (Exception e) {
-            log.error("Error fetching enhanced congestion: {}", e.getMessage(), e);
+            log.error("Error: {}", e.getMessage(), e);
             return ResponseEntity.status(500).body(Map.of(
                     "error", e.getMessage(),
                     "congestionTrend", new ArrayList<>()
