@@ -2,7 +2,6 @@ server:
   port: 8085
 
 spring:
-
   application:
     name: IOT-SENSORS-SERVICE
 
@@ -22,7 +21,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update   # change to validate in production
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate:
@@ -30,32 +29,126 @@ spring:
         jdbc:
           lob:
             non_contextual_creation: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
 
   jackson:
     serialization:
       write-dates-as-timestamps: false
+    time-zone: UTC
 
-#FIXED: Eureka configuration
+  # Email Configuration (Gmail)
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: bunnychaitanya839@gmail.com
+    password: cirxczaiaaxnqhsj
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+  # Enable scheduling
+  task:
+    scheduling:
+      enabled: true
+
+  # CORS Configuration
+  web:
+    cors:
+      allowed-origins: "*"
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+      allowed-headers: "*"
+
+# ==================== MQTT Configuration ====================
+mqtt:
+  broker:
+    url: ssl://6fdddaf19d614da29c86428142cbe7a2.s1.eu.hivemq.cloud:8883
+  username: ruthvik
+  password: Iotiq369.
+
+  # Multi-Topic Configuration
+  topic:
+    healthystation: intel-topic
+    minimeals: intel-minimeals-topic
+    twogood: intel-twogood-topic
+
+
+
+  client:
+    id: cafeteria-analytics-client-${random.uuid}
+
+  default:
+    cafeteria:
+      code: srr-4a
+
+# ==================== Cafeteria Capacity ====================
+cafeteria:
+  srr4a:
+    capacity: 728
+  srr4b:
+    capacity: 623
+
+
+# ==================== Email Report Settings ====================
+# FIXED: Using comma-separated strings instead of YAML arrays
+email:
+  report:
+    enabled: true
+    from: bunnychaitanya839@gmail.com
+    recipients: shaik.lathif@iotiq.co.in,chaitanya.k@acstechnologies.co.in
+    cc: vaishnavi.n@acstechnologies.co.in
+    daily:
+      cron: "0 0 18 * * ?"
+    weekly:
+      cron: "0 0 9 * * MON"
+
+# ==================== Eureka ====================
 eureka:
   client:
     service-url:
-      defaultZone: http://eureka-server:8761/eureka/  # FIXED: Use actual server IP
+      defaultZone: http://eureka-server:8761/eureka/
     register-with-eureka: true
     fetch-registry: true
   instance:
-    prefer-ip-address: true  # FIXED: Use IP instead of hostname
+    prefer-ip-address: true
     instance-id: ${spring.application.name}:${random.value}
-    # REMOVED hostname: localhost - let Eureka auto-detect
 
+# ==================== Logging ====================
 logging:
   level:
     root: INFO
     org.springframework.web: INFO
     org.hibernate.SQL: DEBUG
     org.hibernate.orm.jdbc.bind: TRACE
+    com.bmsedge.iotsensor: DEBUG
+    org.eclipse.paho: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/cafeteria-analytics.log
+    max-size: 10MB
+    max-history: 30
 
+# ==================== Management ====================
 management:
   endpoints:
     web:
       exposure:
         include: "*"
+  endpoint:
+    health:
+      show-details: always
+
+# ==================== Info ====================
+info:
+  app:
+    name: ${spring.application.name}
+    description: IOT Sensors Service - Multi-Topic MQTT Analytics
+    version: 2.0.0
