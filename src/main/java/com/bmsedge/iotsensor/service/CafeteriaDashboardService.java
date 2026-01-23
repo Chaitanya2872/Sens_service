@@ -1864,24 +1864,27 @@ public class CafeteriaDashboardService {
     // ==================== QUEUE ANALYSIS SERVICE METHODS ====================
 
     /**
-     * ✅ Get in_count trends (inflow) for line chart
+     * ✅ FIXED: Get in_count trends (inflow) for line chart - NOW SUPPORTS TIME RANGE
      */
     @Transactional(readOnly = true)
     public QueueLengthTrendDTO.Response getQueueLengthTrends(
             String tenantCode,
             String cafeteriaCode,
-            Integer intervalMinutes
+            Integer intervalMinutes,
+            String timeFilter,
+            Integer timeRange
     ) {
-        log.info("📊 Fetching IN_COUNT trends for {}/{} with {} minute intervals",
-                tenantCode, cafeteriaCode, intervalMinutes);
+        log.info("📊 Fetching IN_COUNT trends for {}/{} with {} minute intervals, filter: {}, range: {}",
+                tenantCode, cafeteriaCode, intervalMinutes, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
 
-            // Use current day by default for queue trends
-            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
-            LocalDateTime endTime = LocalDateTime.now();
+            // ✅ FIXED: Use proper time range calculation
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
             log.info("📅 Time range: {} to {}", startTime, endTime);
 
@@ -1966,23 +1969,29 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ Get average in_count comparison
+     * ✅ FIXED: Get average in_count comparison - NOW SUPPORTS TIME RANGE
      */
     @Transactional(readOnly = true)
     public CounterQueueComparisonDTO.Response getAverageQueueComparison(
             String tenantCode,
-            String cafeteriaCode
+            String cafeteriaCode,
+            String timeFilter,
+            Integer timeRange
     ) {
-        log.info("📊 Fetching average IN_COUNT comparison for {}/{}", tenantCode, cafeteriaCode);
+        log.info("📊 Fetching average IN_COUNT comparison for {}/{}, filter: {}, range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found: " + tenantCode + "/" + cafeteriaCode));
 
-            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
-            LocalDateTime endTime = LocalDateTime.now();
+            // ✅ FIXED: Use proper time range calculation instead of hardcoded current day
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            log.info("📅 Time range: {} to {}", startTime, endTime);
+            log.info("📅 Time range: {} to {} (Filter: {}, Range: {} hrs)",
+                    startTime, endTime, timeFilter, timeRange);
 
             // ✅ Use IN_COUNT instead of queueLength
             List<Object[]> results = analyticsRepository.getAverageInCountComparison(
@@ -2052,23 +2061,29 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ Get congestion rate comparison data for bar chart
+     * ✅ FIXED: Get congestion rate comparison data - NOW SUPPORTS TIME RANGE
      */
     @Transactional(readOnly = true)
     public CounterCongestionRateDTO.Response getCongestionRateComparison(
             String tenantCode,
-            String cafeteriaCode
+            String cafeteriaCode,
+            String timeFilter,
+            Integer timeRange
     ) {
-        log.info("📊 Fetching congestion rate comparison for {}/{}", tenantCode, cafeteriaCode);
+        log.info("📊 Fetching congestion rate comparison for {}/{}, filter: {}, range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found: " + tenantCode + "/" + cafeteriaCode));
 
-            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
-            LocalDateTime endTime = LocalDateTime.now();
+            // ✅ FIXED: Use proper time range calculation instead of hardcoded current day
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            log.info("📅 Time range: {} to {}", startTime, endTime);
+            log.info("📅 Time range: {} to {} (Filter: {}, Range: {} hrs)",
+                    startTime, endTime, timeFilter, timeRange);
 
             // Get all counters for this cafeteria
             List<FoodCounter> counters = counterRepository.findByCafeteriaLocationId(location.getId());
@@ -2234,57 +2249,69 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ NEW: Get Queue KPIs calculated from actual data
+     * ✅ FIXED: Get Queue KPIs calculated from actual data - NOW SUPPORTS TIME RANGE
      */
     @Transactional(readOnly = true)
     public QueueKPIResponseDTO getQueueKPIs(
             String tenantCode,
-            String cafeteriaCode
+            String cafeteriaCode,
+            String timeFilter,
+            Integer timeRange
     ) {
-        log.info("📊 Calculating Queue KPIs for {}/{}", tenantCode, cafeteriaCode);
+        log.info("📊 Calculating Queue KPIs for {}/{}, filter: {}, range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
 
         try {
-            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
-            LocalDateTime endTime = LocalDateTime.now();
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            // Get all three datasets
-            CounterQueueComparisonDTO.Response queueComparison = getAverageQueueComparison(tenantCode, cafeteriaCode);
-            CounterCongestionRateDTO.Response congestionRate = getCongestionRateComparison(tenantCode, cafeteriaCode);
-            QueueLengthTrendDTO.Response queueTrends = getQueueLengthTrends(tenantCode, cafeteriaCode, 5);
+            CounterQueueComparisonDTO.Response queueComparison = getAverageQueueComparison(tenantCode, cafeteriaCode, timeFilter, timeRange);
+            CounterCongestionRateDTO.Response congestionRate = getCongestionRateComparison(tenantCode, cafeteriaCode, timeFilter, timeRange);
+            QueueLengthTrendDTO.Response queueTrends = getQueueLengthTrends(tenantCode, cafeteriaCode, 5, timeFilter, timeRange);
 
-            // Calculate KPIs
             Double overallAvgQueue = queueComparison.getSummary().getOverallAverage();
 
             Double peakQueueLength = queueTrends.getSummary() != null
                     ? queueTrends.getSummary().getPeakQueueLength()
                     : 0.0;
 
-            String mostCongestedCounter = congestionRate.getSummary().getMostCongestedCounter();
+            // ✅ FIXED: Use the busiest counter from queue comparison (highest avg in_count)
+            String mostCongestedCounter = queueComparison.getSummary().getBusiestCounter();
 
-            Double congestionRateValue = congestionRate.getSummary().getOverallCongestionRate();
+            // ✅ FIXED: Get congestion rate for the actual busiest counter
+            Double congestionRateValue = congestionRate.getCounters().stream()
+                    .filter(c -> c.getCounterName().equals(mostCongestedCounter))
+                    .findFirst()
+                    .map(CounterCongestionRateDTO::getCongestionRate)
+                    .orElse(0.0);
 
-            // Calculate peak hour stats
             String peakTime = queueTrends.getSummary() != null
                     ? queueTrends.getSummary().getPeakTime()
                     : "N/A";
 
-            // Find average around peak time
             Double peakHourAvgQueue = calculatePeakHourAverage(queueTrends);
             String peakHourRange = calculatePeakHourRange(peakTime);
 
             QueueKPIResponseDTO response = QueueKPIResponseDTO.builder()
                     .overallAvgQueue(overallAvgQueue)
                     .peakQueueLength(peakQueueLength)
-                    .mostCongestedCounter(mostCongestedCounter)
-                    .congestionRate(congestionRateValue)
+                    .mostCongestedCounter(mostCongestedCounter)  // Now matches busiest from trends
+                    .congestionRate(congestionRateValue)  // Now shows rate for that specific counter
                     .peakHourAvgQueue(peakHourAvgQueue)
                     .peakHourRange(peakHourRange)
                     .timeRange(formatTimeRange(startTime, endTime))
                     .reportGeneratedAt(LocalDateTime.now())
                     .build();
 
-            log.info("✅ Queue KPIs calculated: avgQueue={}, peak={}, mostCongested={}, rate={}%",
-                    overallAvgQueue, peakQueueLength, mostCongestedCounter, congestionRateValue);
+            log.info("✅ Queue KPIs calculated: avgQueue={}, peak={}, mostCongested={} (avgQueue={}), rate={}%",
+                    overallAvgQueue, peakQueueLength, mostCongestedCounter,
+                    queueComparison.getCounters().stream()
+                            .filter(c -> c.getCounterName().equals(mostCongestedCounter))
+                            .findFirst()
+                            .map(CounterQueueComparisonDTO::getAverageQueueLength)
+                            .orElse(0.0),
+                    congestionRateValue);
 
             return response;
 

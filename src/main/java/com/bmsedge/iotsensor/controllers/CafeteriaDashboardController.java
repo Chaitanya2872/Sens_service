@@ -110,89 +110,27 @@ public class CafeteriaDashboardController {
         }
     }
 
-    // ==================== QUEUE ANALYSIS ENDPOINTS (UPDATED TO USE IN_COUNT) ====================
+    // ==================== QUEUE ANALYSIS ENDPOINTS (FIXED WITH TIME RANGE SUPPORT) ====================
 
     /**
-     * ✅ GET Average Queue Comparison (Bar Chart) - NOW USING IN_COUNT
-     * Shows average in_count (inflow) for each counter
-     */
-    @GetMapping("/{tenantCode}/{cafeteriaCode}/queue-comparison")
-    public ResponseEntity<CounterQueueComparisonDTO.Response> getAverageQueueComparison(
-            @PathVariable String tenantCode,
-            @PathVariable String cafeteriaCode) {
-
-        log.info("📊 Queue Comparison Request (IN_COUNT) - Tenant: {}, Cafeteria: {}",
-                tenantCode, cafeteriaCode);
-
-        try {
-            CounterQueueComparisonDTO.Response response =
-                    dashboardService.getAverageQueueComparison(tenantCode, cafeteriaCode);
-
-            log.info("✅ Returned in_count comparison for {} counters", response.getTotalCounters());
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("❌ Error fetching in_count comparison: {}", e.getMessage(), e);
-            return ResponseEntity.status(500).body(
-                    CounterQueueComparisonDTO.Response.builder()
-                            .counters(new ArrayList<>())
-                            .reportGeneratedAt(LocalDateTime.now())
-                            .totalCounters(0)
-                            .build()
-            );
-        }
-    }
-
-    /**
-     * ✅ GET Congestion Rate Comparison (Bar Chart)
-     * Shows percentage of time each counter spent in HIGH congestion
-     */
-    @GetMapping("/{tenantCode}/{cafeteriaCode}/congestion-rate")
-    public ResponseEntity<CounterCongestionRateDTO.Response> getCongestionRateComparison(
-            @PathVariable String tenantCode,
-            @PathVariable String cafeteriaCode) {
-
-        log.info("📊 Congestion Rate Request - Tenant: {}, Cafeteria: {}",
-                tenantCode, cafeteriaCode);
-
-        try {
-            CounterCongestionRateDTO.Response response =
-                    dashboardService.getCongestionRateComparison(tenantCode, cafeteriaCode);
-
-            log.info("✅ Returned congestion rate for {} counters", response.getTotalCounters());
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("❌ Error fetching congestion rate: {}", e.getMessage(), e);
-            return ResponseEntity.status(500).body(
-                    CounterCongestionRateDTO.Response.builder()
-                            .counters(new ArrayList<>())
-                            .reportGeneratedAt(LocalDateTime.now())
-                            .totalCounters(0)
-                            .build()
-            );
-        }
-    }
-
-    /**
-     * ✅ GET Queue Length Trends (Line Chart) - NOW USING IN_COUNT
+     * ✅ FIXED: GET Queue Length Trends (Line Chart) - NOW SUPPORTS TIME RANGE
      * Shows time-series data of in_count (inflow) for all counters
-     * Default: 5-minute intervals
+     * Default: 5-minute intervals, current day
      */
     @GetMapping("/{tenantCode}/{cafeteriaCode}/queue-trends")
     public ResponseEntity<QueueLengthTrendDTO.Response> getQueueLengthTrends(
             @PathVariable String tenantCode,
             @PathVariable String cafeteriaCode,
-            @RequestParam(defaultValue = "5") Integer intervalMinutes) {
+            @RequestParam(defaultValue = "5") Integer intervalMinutes,
+            @RequestParam(defaultValue = "daily") String timeFilter,
+            @RequestParam(required = false) Integer timeRange) {
 
-        log.info("📊 Queue Trends Request (IN_COUNT) - Tenant: {}, Cafeteria: {}, Interval: {} min",
-                tenantCode, cafeteriaCode, intervalMinutes);
+        log.info("📊 Queue Trends Request (IN_COUNT) - Tenant: {}, Cafeteria: {}, Interval: {} min, Filter: {}, Range: {}",
+                tenantCode, cafeteriaCode, intervalMinutes, timeFilter, timeRange);
 
         try {
             QueueLengthTrendDTO.Response response =
-                    dashboardService.getQueueLengthTrends(tenantCode, cafeteriaCode, intervalMinutes);
+                    dashboardService.getQueueLengthTrends(tenantCode, cafeteriaCode, intervalMinutes, timeFilter, timeRange);
 
             log.info("✅ Returned in_count trends: {} time points for {} counters",
                     response.getSummary().getTotalDataPoints(), response.getCounters().size());
@@ -213,19 +151,89 @@ public class CafeteriaDashboardController {
     }
 
     /**
-     * ✅ NEW: GET Queue KPIs Summary
+     * ✅ FIXED: GET Average Queue Comparison (Bar Chart) - NOW SUPPORTS TIME RANGE
+     * Shows average in_count (inflow) for each counter
+     */
+    @GetMapping("/{tenantCode}/{cafeteriaCode}/queue-comparison")
+    public ResponseEntity<CounterQueueComparisonDTO.Response> getAverageQueueComparison(
+            @PathVariable String tenantCode,
+            @PathVariable String cafeteriaCode,
+            @RequestParam(defaultValue = "daily") String timeFilter,
+            @RequestParam(required = false) Integer timeRange) {
+
+        log.info("📊 Queue Comparison Request (IN_COUNT) - Tenant: {}, Cafeteria: {}, Filter: {}, Range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
+
+        try {
+            CounterQueueComparisonDTO.Response response =
+                    dashboardService.getAverageQueueComparison(tenantCode, cafeteriaCode, timeFilter, timeRange);
+
+            log.info("✅ Returned in_count comparison for {} counters", response.getTotalCounters());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("❌ Error fetching in_count comparison: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body(
+                    CounterQueueComparisonDTO.Response.builder()
+                            .counters(new ArrayList<>())
+                            .reportGeneratedAt(LocalDateTime.now())
+                            .totalCounters(0)
+                            .build()
+            );
+        }
+    }
+
+    /**
+     * ✅ FIXED: GET Congestion Rate Comparison (Bar Chart) - NOW SUPPORTS TIME RANGE
+     * Shows percentage of time each counter spent in HIGH congestion
+     */
+    @GetMapping("/{tenantCode}/{cafeteriaCode}/congestion-rate")
+    public ResponseEntity<CounterCongestionRateDTO.Response> getCongestionRateComparison(
+            @PathVariable String tenantCode,
+            @PathVariable String cafeteriaCode,
+            @RequestParam(defaultValue = "daily") String timeFilter,
+            @RequestParam(required = false) Integer timeRange) {
+
+        log.info("📊 Congestion Rate Request - Tenant: {}, Cafeteria: {}, Filter: {}, Range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
+
+        try {
+            CounterCongestionRateDTO.Response response =
+                    dashboardService.getCongestionRateComparison(tenantCode, cafeteriaCode, timeFilter, timeRange);
+
+            log.info("✅ Returned congestion rate for {} counters", response.getTotalCounters());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("❌ Error fetching congestion rate: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body(
+                    CounterCongestionRateDTO.Response.builder()
+                            .counters(new ArrayList<>())
+                            .reportGeneratedAt(LocalDateTime.now())
+                            .totalCounters(0)
+                            .build()
+            );
+        }
+    }
+
+    /**
+     * ✅ FIXED: GET Queue KPIs Summary - NOW SUPPORTS TIME RANGE
      * Provides calculated KPIs from queue data
      */
     @GetMapping("/{tenantCode}/{cafeteriaCode}/queue-kpis")
     public ResponseEntity<QueueKPIResponseDTO> getQueueKPIs(
             @PathVariable String tenantCode,
-            @PathVariable String cafeteriaCode) {
+            @PathVariable String cafeteriaCode,
+            @RequestParam(defaultValue = "daily") String timeFilter,
+            @RequestParam(required = false) Integer timeRange) {
 
-        log.info("📊 Queue KPIs Request - Tenant: {}, Cafeteria: {}",
-                tenantCode, cafeteriaCode);
+        log.info("📊 Queue KPIs Request - Tenant: {}, Cafeteria: {}, Filter: {}, Range: {}",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
 
         try {
-            QueueKPIResponseDTO response = dashboardService.getQueueKPIs(tenantCode, cafeteriaCode);
+            QueueKPIResponseDTO response = dashboardService.getQueueKPIs(tenantCode, cafeteriaCode, timeFilter, timeRange);
 
             log.info("✅ Returned Queue KPIs");
 
