@@ -49,38 +49,89 @@ public class CafeteriaDashboardService {
                 .anyMatch(name -> name.equalsIgnoreCase(counterName.trim()));
     }
 
-    // ==================== CURRENT DAY CONSTRAINT HELPERS ====================
+    // ==================== TIME RANGE CALCULATION (FIXED) ====================
 
     /**
-     * ✅ ENFORCED: Always return 7:00 AM today
+     * ✅ FIXED: Calculate time range based on filter and range parameters
+     * This method now properly honors the timeFilter and timeRange parameters
+     * instead of always returning current day only.
+     *
+     * @param timeFilter Filter type: "daily", "weekly", "monthly"
+     * @param timeRange Optional explicit hour range (takes precedence over timeFilter)
+     * @return Array of [startTime, endTime]
      */
+    private LocalDateTime[] calculateTimeRange(String timeFilter, Integer timeRange) {
+        LocalDateTime endTime = LocalDateTime.now();
+        LocalDateTime startTime;
+
+        if (timeRange != null && timeRange > 0) {
+            // Explicit hour range takes precedence
+            startTime = endTime.minusHours(timeRange);
+            log.info("📅 Using explicit time range: {} hours ago to now", timeRange);
+        } else {
+            // Use filter to determine range
+            switch (timeFilter != null ? timeFilter.toLowerCase() : "daily") {
+                case "daily":
+                    // Today from 7:00 AM
+                    startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+                    log.info("📅 Using daily filter: 7:00 AM today to now");
+                    break;
+                case "weekly":
+                    // Last 7 days
+                    startTime = endTime.minusDays(7);
+                    log.info("📅 Using weekly filter: last 7 days to now");
+                    break;
+                case "monthly":
+                    // Last 30 days
+                    startTime = endTime.minusDays(30);
+                    log.info("📅 Using monthly filter: last 30 days to now");
+                    break;
+                default:
+                    // Default to current day
+                    startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+                    log.warn("⚠️ Unknown filter '{}', defaulting to daily", timeFilter);
+            }
+        }
+
+        return new LocalDateTime[]{startTime, endTime};
+    }
+
+    /**
+     * @deprecated Use calculateTimeRange() instead.
+     * This method is kept for backward compatibility but should not be used.
+     */
+    @Deprecated
     private LocalDateTime getCurrentDayStart() {
         return LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
     }
 
     /**
-     * ✅ ENFORCED: Always return current time
+     * @deprecated Use calculateTimeRange() instead.
+     * This method is kept for backward compatibility but should not be used.
      */
+    @Deprecated
     private LocalDateTime getCurrentDayEnd() {
         return LocalDateTime.now();
     }
 
-    // ==================== MAIN DASHBOARD METHOD ====================
+    // ==================== MAIN DASHBOARD METHOD (FIXED) ====================
 
     @Transactional(readOnly = true)
     public DashboardDataDTO getDashboardData(String tenantCode, String cafeteriaCode, String timeFilter, Integer timeRange) {
-        log.info("📅 Fetching dashboard data for tenant: {}, cafeteria: {} - CURRENT DAY ONLY",
-                tenantCode, cafeteriaCode);
+        log.info("📅 Fetching dashboard data for tenant: {}, cafeteria: {}, filter: {}, range: {} hrs",
+                tenantCode, cafeteriaCode, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
 
-            // ✅ ENFORCED: Always use current day (7:00 AM to now)
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            // ✅ FIXED: Properly calculate time range from parameters
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            log.info("📅 Time range: {} to {} (CURRENT DAY ONLY)", startTime, endTime);
+            log.info("📅 Time range: {} to {} (Filter: {}, Range: {} hrs)",
+                    startTime, endTime, timeFilter, timeRange);
 
             DashboardDataDTO dashboard = DashboardDataDTO.builder()
                     .occupancyStatus(getOccupancyStatus(location.getId()))
@@ -91,9 +142,9 @@ public class CafeteriaDashboardService {
                     .occupancyTrend(getOccupancyTrend(location.getId(), startTime, endTime))
                     .counterCongestionTrend(getCounterCongestionTrend(location.getId(), startTime, endTime))
                     .counterEfficiency(getCounterEfficiency(location.getId(), startTime, endTime))
-                    .todaysVisitors(getTodaysVisitors(location.getId()))
-                    .avgDwellTime(getAvgDwellTime(location.getId()))
-                    .peakHours(getPeakHours(location.getId()))
+                    .todaysVisitors(getTodaysVisitors(location.getId(), startTime, endTime))
+                    .avgDwellTime(getAvgDwellTime(location.getId(), startTime, endTime))
+                    .peakHours(getPeakHours(location.getId(), startTime, endTime))
                     .lastUpdated(LocalDateTime.now())
                     .build();
 
@@ -173,7 +224,7 @@ public class CafeteriaDashboardService {
     // ==================== FLOW DATA ====================
 
     /**
-     * ✅ FIXED: Uses current day data only, counter-level filtering
+     * ✅ Uses provided time range, counter-level filtering
      */
     private List<FlowDataDTO> getFlowData(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
@@ -224,7 +275,7 @@ public class CafeteriaDashboardService {
     // ==================== COUNTER STATUS ====================
 
     /**
-     * ✅ FIXED: Get counter status with proper counter-specific dwell time calculation
+     * ✅ Get counter status with proper counter-specific dwell time calculation
      */
     private List<CounterStatusDTO> getCounterStatus(Long cafeteriaLocationId) {
         try {
@@ -237,6 +288,7 @@ public class CafeteriaDashboardService {
                         String counterName = counter.getCounterName();
 
                         // ✅ Get counter-specific average dwell time (considers counter type)
+                        // Note: This uses current day for averaging - might need time range parameter
                         Double avgDwell = getCounterSpecificAvgDwellTime(counter.getId(), counterName);
 
                         log.debug("Counter: {} - AvgDwell: {}min, Queue: {}, Wait: {}min",
@@ -262,15 +314,17 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ UPDATED: Counter-specific dwell time with different logic per counter type
+     * ✅ Counter-specific dwell time with different logic per counter type
+     * NOTE: Currently uses current day - could be enhanced to accept time range
      *
      * Mini Meals & Two Good: Use manual_wait_time ONLY
      * Other counters: Use COALESCE (avgDwellTime → estimatedWaitTime → manualWaitTime)
      */
     private Double getCounterSpecificAvgDwellTime(Long counterId, String counterName) {
         try {
-            LocalDateTime startOfDay = getCurrentDayStart();
-            LocalDateTime now = getCurrentDayEnd();
+            // TODO: Consider accepting startTime/endTime parameters for custom ranges
+            LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime now = LocalDateTime.now();
 
             List<CafeteriaAnalytics> counterAnalytics = analyticsRepository
                     .findByFoodCounterIdAndTimestampBetween(counterId, startOfDay, now);
@@ -358,7 +412,7 @@ public class CafeteriaDashboardService {
     // ==================== DWELL TIME DISTRIBUTION ====================
 
     /**
-     * ✅ FIXED: Get dwell time distribution - CURRENT DAY ONLY, COUNTER-LEVEL ONLY
+     * ✅ Uses provided time range, COUNTER-LEVEL ONLY
      * Uses counter-specific logic for each counter type
      */
     private List<DwellTimeDataDTO> getDwellTimeData(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
@@ -450,7 +504,7 @@ public class CafeteriaDashboardService {
     // ==================== COUNTER-SPECIFIC DWELL TIME ====================
 
     /**
-     * ✅ FIXED: Get dwell time data for a specific counter - CURRENT DAY ONLY
+     * ✅ FIXED: Get dwell time data for a specific counter with proper time range handling
      */
     @Transactional(readOnly = true)
     public CounterDwellTimeResponseDTO getDwellTimeByCounter(
@@ -460,7 +514,8 @@ public class CafeteriaDashboardService {
             String timeFilter,
             Integer timeRange
     ) {
-        log.info("Fetching counter-specific dwell time for counter: {} - CURRENT DAY ONLY", counterName);
+        log.info("Fetching counter-specific dwell time for counter: {}, filter: {}, range: {}",
+                counterName, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
@@ -471,11 +526,12 @@ public class CafeteriaDashboardService {
 
             log.info("Found counter: {} with ID: {}", counterName, counter.getId());
 
-            // ✅ ENFORCED: Current day only
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            // ✅ FIXED: Use proper time range calculation
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            log.info("📅 Using current day: {} to {}", startTime, endTime);
+            log.info("📅 Using time range: {} to {}", startTime, endTime);
 
             // Get analytics data for this specific counter
             List<CafeteriaAnalytics> analytics = analyticsRepository
@@ -612,7 +668,7 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ UPDATED: Calculate counter statistics using OCCUPANCY-BASED deltas
+     * ✅ Calculate counter statistics using OCCUPANCY-BASED deltas
      */
     private CounterStatsDTO calculateCounterStatsWithFallback(
             List<CafeteriaAnalytics> analytics,
@@ -736,7 +792,7 @@ public class CafeteriaDashboardService {
     // ==================== FOOTFALL COMPARISON ====================
 
     /**
-     * ✅ FIXED: Footfall comparison - CURRENT DAY ONLY
+     * ✅ Uses provided time range
      */
     private List<FootfallComparisonDTO> getFootfallComparison(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
@@ -794,7 +850,7 @@ public class CafeteriaDashboardService {
     // ==================== OCCUPANCY TREND ====================
 
     /**
-     * ✅ FIXED: Occupancy trend - CURRENT DAY ONLY, COUNTER-LEVEL ONLY
+     * ✅ Uses provided time range, COUNTER-LEVEL ONLY
      */
     private List<OccupancyTrendDTO> getOccupancyTrend(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
@@ -842,7 +898,7 @@ public class CafeteriaDashboardService {
     // ==================== COUNTER CONGESTION TREND ====================
 
     /**
-     * ✅ FIXED: Counter congestion trend - CURRENT DAY ONLY, COUNTER-LEVEL ONLY
+     * ✅ Uses provided time range, COUNTER-LEVEL ONLY
      */
     private List<CounterCongestionTrendDTO> getCounterCongestionTrend(
             Long cafeteriaLocationId,
@@ -882,7 +938,7 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ FIXED: Aggregate counter congestion using CURRENT_OCCUPANCY
+     * ✅ Aggregate counter congestion using CURRENT_OCCUPANCY
      */
     private List<CounterCongestionTrendDTO> aggregateCounterCongestion(List<CafeteriaAnalytics> analytics) {
 
@@ -939,7 +995,7 @@ public class CafeteriaDashboardService {
     // ==================== COUNTER MASTER DATA ====================
 
     /**
-     * ✅ FIXED: Get master data for all counters - CURRENT DAY ONLY
+     * ✅ FIXED: Get master data for all counters with proper time range handling
      */
     @Transactional(readOnly = true)
     public CounterMasterDataResponseDTO getCounterMasterData(
@@ -949,18 +1005,19 @@ public class CafeteriaDashboardService {
             Integer timeRange,
             Boolean latestOnly) {
 
-        log.info("📋 Fetching counter master data for {}/{} - Latest: {} - CURRENT DAY ONLY",
-                tenantCode, cafeteriaCode, latestOnly);
+        log.info("📋 Fetching counter master data for {}/{} - Latest: {}, Filter: {}, Range: {}",
+                tenantCode, cafeteriaCode, latestOnly, timeFilter, timeRange);
 
         try {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found: " + tenantCode + "/" + cafeteriaCode));
 
-            // ✅ ENFORCED: Current day only
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            // ✅ FIXED: Use proper time range calculation
+            LocalDateTime[] calculatedRange = calculateTimeRange(timeFilter, timeRange);
+            LocalDateTime startTime = calculatedRange[0];
+            LocalDateTime endTime = calculatedRange[1];
 
-            log.info("📅 Time range: {} to {} (CURRENT DAY)", startTime, endTime);
+            log.info("📅 Time range: {} to {}", startTime, endTime);
 
             // Choose query based on latestOnly flag
             List<Object[]> results;
@@ -1264,7 +1321,7 @@ public class CafeteriaDashboardService {
     // ==================== ENHANCED COUNTER CONGESTION ====================
 
     /**
-     * ✅ FIXED: Enhanced counter congestion - CURRENT DAY ONLY, COUNTER-LEVEL ONLY
+     * ✅ Enhanced counter congestion with proper time range handling
      */
     public List<EnhancedCounterCongestionDTO> getEnhancedCounterCongestionTrend(
             Long cafeteriaLocationId,
@@ -1272,11 +1329,7 @@ public class CafeteriaDashboardService {
             LocalDateTime endTime,
             String timeFilter) {
         try {
-            // ✅ ENFORCED: Use current day
-            startTime = getCurrentDayStart();
-            endTime = getCurrentDayEnd();
-
-            log.info("📊 Fetching enhanced congestion from {} to {} (CURRENT DAY)", startTime, endTime);
+            log.info("📊 Fetching enhanced congestion from {} to {}", startTime, endTime);
 
             List<CafeteriaAnalytics> analytics = analyticsRepository.findByCafeteriaLocationAndTimeRange(
                     cafeteriaLocationId, startTime, endTime);
@@ -1397,7 +1450,7 @@ public class CafeteriaDashboardService {
     // ==================== COUNTER EFFICIENCY ====================
 
     /**
-     * ✅ FIXED: Counter efficiency - CURRENT DAY ONLY with OCCUPANCY-based deltas
+     * ✅ FIXED: Counter efficiency with proper time range and OCCUPANCY-based deltas
      */
     private List<CounterEfficiencyDTO> getCounterEfficiency(
             Long cafeteriaLocationId,
@@ -1405,7 +1458,7 @@ public class CafeteriaDashboardService {
             LocalDateTime endTime
     ) {
         try {
-            log.info("📊 Fetching counter efficiency for cafeteria: {} - CURRENT DAY", cafeteriaLocationId);
+            log.info("📊 Fetching counter efficiency from {} to {}", startTime, endTime);
 
             List<Object[]> performance =
                     analyticsRepository.getCounterPerformanceComparisonWithMax(
@@ -1480,12 +1533,6 @@ public class CafeteriaDashboardService {
      *
      * Formula: New Entries = Current Occupancy - Previous Occupancy
      * Only count POSITIVE deltas (people entering)
-     *
-     * Example:
-     * 10:00 → 5 (baseline)
-     * 10:01 → 6 → +1 counted
-     * 10:02 → 6 → 0 (no change)
-     * 10:03 → 4 → -2 ignored (people leaving)
      */
     private int calculateTotalEntriesFromOccupancy(List<CafeteriaAnalytics> analytics) {
         if (analytics.isEmpty()) {
@@ -1529,14 +1576,11 @@ public class CafeteriaDashboardService {
     // ==================== TODAY'S VISITORS ====================
 
     /**
-     * ✅ FIXED: Today's visitors - CURRENT DAY ONLY with OCCUPANCY-based deltas
+     * ✅ FIXED: Today's visitors with proper time range and OCCUPANCY-based deltas
      */
-    private TodaysVisitorsDTO getTodaysVisitors(Long cafeteriaLocationId) {
+    private TodaysVisitorsDTO getTodaysVisitors(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
-            LocalDateTime startOfDay = getCurrentDayStart();
-            LocalDateTime now = getCurrentDayEnd();
-
-            log.info("📊 Calculating visitors from {} to {}", startOfDay, now);
+            log.info("📊 Calculating visitors from {} to {}", startTime, endTime);
 
             // ✅ Get all counters for this cafeteria
             List<FoodCounter> counters = counterRepository.findByCafeteriaLocationId(cafeteriaLocationId);
@@ -1550,7 +1594,7 @@ public class CafeteriaDashboardService {
             int totalVisitorsToday = 0;
             for (FoodCounter counter : counters) {
                 List<CafeteriaAnalytics> analytics = analyticsRepository
-                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), startOfDay, now);
+                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), startTime, endTime);
 
                 int counterEntries = calculateTotalEntriesFromOccupancy(analytics);
                 totalVisitorsToday += counterEntries;
@@ -1558,46 +1602,51 @@ public class CafeteriaDashboardService {
                 log.debug("Counter '{}': {} entries", counter.getCounterName(), counterEntries);
             }
 
-            log.info("✅ Total visitors today (all counters): {}", totalVisitorsToday);
+            log.info("✅ Total visitors for period (all counters): {}", totalVisitorsToday);
 
-            // ✅ Calculate yesterday's visitors the same way
-            LocalDateTime yesterdayStart = startOfDay.minusDays(1);
-            LocalDateTime yesterdayEnd = now.minusDays(1);
+            // ✅ Calculate comparison period (previous day of same length)
+            long hoursDiff = java.time.Duration.between(startTime, endTime).toHours();
+            LocalDateTime comparisonStart = startTime.minusHours(hoursDiff);
+            LocalDateTime comparisonEnd = startTime;
 
-            int totalVisitorsYesterday = 0;
+            int totalVisitorsComparison = 0;
             for (FoodCounter counter : counters) {
                 List<CafeteriaAnalytics> analytics = analyticsRepository
-                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), yesterdayStart, yesterdayEnd);
+                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), comparisonStart, comparisonEnd);
 
-                totalVisitorsYesterday += calculateTotalEntriesFromOccupancy(analytics);
+                totalVisitorsComparison += calculateTotalEntriesFromOccupancy(analytics);
             }
 
-            log.info("✅ Total visitors yesterday (all counters): {}", totalVisitorsYesterday);
+            log.info("✅ Total visitors for comparison period (all counters): {}", totalVisitorsComparison);
 
             // Calculate percentage change
             Double percentageChange = 0.0;
             String trend = "up";
-            if (totalVisitorsYesterday > 0) {
-                percentageChange = ((totalVisitorsToday - totalVisitorsYesterday) * 100.0) / totalVisitorsYesterday;
+            if (totalVisitorsComparison > 0) {
+                percentageChange = ((totalVisitorsToday - totalVisitorsComparison) * 100.0) / totalVisitorsComparison;
                 trend = percentageChange >= 0 ? "up" : "down";
             }
 
             // ✅ Calculate last hour visitors
-            LocalDateTime lastHourStart = now.minusHours(1);
+            LocalDateTime lastHourStart = endTime.minusHours(1);
 
             int totalVisitorsLastHour = 0;
             for (FoodCounter counter : counters) {
                 List<CafeteriaAnalytics> analytics = analyticsRepository
-                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), lastHourStart, now);
+                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), lastHourStart, endTime);
 
                 totalVisitorsLastHour += calculateTotalEntriesFromOccupancy(analytics);
             }
 
             log.info("✅ Total visitors last hour (all counters): {}", totalVisitorsLastHour);
 
+            // Format since time
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("h:mm a");
+            String sinceTime = startTime.format(formatter);
+
             return TodaysVisitorsDTO.builder()
                     .total(totalVisitorsToday)
-                    .sinceTime("7:00 AM")
+                    .sinceTime(sinceTime)
                     .lastHour(totalVisitorsLastHour)
                     .percentageChange(Math.round(percentageChange * 100.0) / 100.0)
                     .trend(trend)
@@ -1622,9 +1671,9 @@ public class CafeteriaDashboardService {
     // ==================== AVERAGE DWELL TIME ====================
 
     /**
-     * ✅ FIXED: Get average dwell time - CURRENT DAY ONLY, COUNTER-LEVEL ONLY with counter-specific logic
+     * ✅ FIXED: Get average dwell time with proper time range, COUNTER-LEVEL ONLY with counter-specific logic
      */
-    private AvgDwellTimeDTO getAvgDwellTime(Long cafeteriaLocationId) {
+    private AvgDwellTimeDTO getAvgDwellTime(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
             List<FoodCounter> counters = counterRepository.findByCafeteriaLocationId(cafeteriaLocationId);
 
@@ -1636,7 +1685,16 @@ public class CafeteriaDashboardService {
             List<Double> counterAverages = new ArrayList<>();
 
             for (FoodCounter counter : counters) {
-                Double counterAvg = getCounterSpecificAvgDwellTime(counter.getId(), counter.getCounterName());
+                // Get analytics for this counter within time range
+                List<CafeteriaAnalytics> analytics = analyticsRepository
+                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), startTime, endTime);
+
+                if (analytics.isEmpty()) {
+                    continue;
+                }
+
+                // Calculate average using counter-specific logic
+                Double counterAvg = calculateCounterAverage(analytics, counter.getCounterName());
                 if (counterAvg != null && counterAvg > 0) {
                     counterAverages.add(counterAvg);
                 }
@@ -1673,6 +1731,48 @@ public class CafeteriaDashboardService {
         }
     }
 
+    /**
+     * Helper method to calculate counter-specific average
+     */
+    private Double calculateCounterAverage(List<CafeteriaAnalytics> analytics, String counterName) {
+        List<Double> validTimes = new ArrayList<>();
+
+        if (usesManualWaitTimeOnly(counterName)) {
+            // Mini Meals & Two Good: Use ONLY manual_wait_time
+            validTimes = analytics.stream()
+                    .map(CafeteriaAnalytics::getManualWaitTime)
+                    .filter(Objects::nonNull)
+                    .filter(t -> t > 0)
+                    .collect(Collectors.toList());
+        } else {
+            // Other counters: COALESCE logic
+            for (CafeteriaAnalytics a : analytics) {
+                Double time = null;
+
+                if (a.getAvgDwellTime() != null && a.getAvgDwellTime() > 0) {
+                    time = a.getAvgDwellTime();
+                } else if (a.getEstimatedWaitTime() != null && a.getEstimatedWaitTime() > 0) {
+                    time = a.getEstimatedWaitTime();
+                } else if (a.getManualWaitTime() != null && a.getManualWaitTime() > 0) {
+                    time = a.getManualWaitTime();
+                }
+
+                if (time != null && time > 0) {
+                    validTimes.add(time);
+                }
+            }
+        }
+
+        if (validTimes.isEmpty()) {
+            return null;
+        }
+
+        return validTimes.stream()
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0.0);
+    }
+
     private AvgDwellTimeDTO buildEmptyAvgDwellTime() {
         return AvgDwellTimeDTO.builder()
                 .minutes(0)
@@ -1688,13 +1788,10 @@ public class CafeteriaDashboardService {
     // ==================== PEAK HOURS ====================
 
     /**
-     * ✅ UPDATED: Peak hours - Per-counter analysis showing when each counter has highest occupancy
+     * ✅ FIXED: Peak hours with proper time range - Per-counter analysis showing when each counter has highest occupancy
      */
-    private PeakHoursDTO getPeakHours(Long cafeteriaLocationId) {
+    private PeakHoursDTO getPeakHours(Long cafeteriaLocationId, LocalDateTime startTime, LocalDateTime endTime) {
         try {
-            LocalDateTime startOfDay = getCurrentDayStart();
-            LocalDateTime now = getCurrentDayEnd();
-
             // Get all counters
             List<FoodCounter> counters = counterRepository.findByCafeteriaLocationId(cafeteriaLocationId);
 
@@ -1708,7 +1805,7 @@ public class CafeteriaDashboardService {
 
             for (FoodCounter counter : counters) {
                 List<CafeteriaAnalytics> analytics = analyticsRepository
-                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), startOfDay, now);
+                        .findByFoodCounterIdAndTimestampBetween(counter.getId(), startTime, endTime);
 
                 if (analytics.isEmpty()) {
                     continue;
@@ -1764,10 +1861,10 @@ public class CafeteriaDashboardService {
         }
     }
 
-    // ==================== QUEUE ANALYSIS SERVICE METHODS (UPDATED TO USE IN_COUNT) ====================
+    // ==================== QUEUE ANALYSIS SERVICE METHODS ====================
 
     /**
-     * ✅ Get in_count trends (inflow) for line chart - UPDATED TO USE IN_COUNT
+     * ✅ Get in_count trends (inflow) for line chart
      */
     @Transactional(readOnly = true)
     public QueueLengthTrendDTO.Response getQueueLengthTrends(
@@ -1782,8 +1879,9 @@ public class CafeteriaDashboardService {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found"));
 
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            // Use current day by default for queue trends
+            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime endTime = LocalDateTime.now();
 
             log.info("📅 Time range: {} to {}", startTime, endTime);
 
@@ -1868,7 +1966,7 @@ public class CafeteriaDashboardService {
     }
 
     /**
-     * ✅ Get average in_count comparison - UPDATED TO USE IN_COUNT
+     * ✅ Get average in_count comparison
      */
     @Transactional(readOnly = true)
     public CounterQueueComparisonDTO.Response getAverageQueueComparison(
@@ -1881,8 +1979,8 @@ public class CafeteriaDashboardService {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found: " + tenantCode + "/" + cafeteriaCode));
 
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime endTime = LocalDateTime.now();
 
             log.info("📅 Time range: {} to {}", startTime, endTime);
 
@@ -1956,10 +2054,6 @@ public class CafeteriaDashboardService {
     /**
      * ✅ Get congestion rate comparison data for bar chart
      */
-    /**
-     * ✅ UPDATED: Get congestion rate comparison using PERCENTAGE-BASED FORMULA
-     * Uses current_occupancy to calculate congestion based on time spent in HIGH/MEDIUM/LOW states
-     */
     @Transactional(readOnly = true)
     public CounterCongestionRateDTO.Response getCongestionRateComparison(
             String tenantCode,
@@ -1971,8 +2065,8 @@ public class CafeteriaDashboardService {
             CafeteriaLocation location = locationRepository.findByTenantCodeAndCafeteriaCode(tenantCode, cafeteriaCode)
                     .orElseThrow(() -> new RuntimeException("Cafeteria not found: " + tenantCode + "/" + cafeteriaCode));
 
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime endTime = LocalDateTime.now();
 
             log.info("📅 Time range: {} to {}", startTime, endTime);
 
@@ -2150,8 +2244,8 @@ public class CafeteriaDashboardService {
         log.info("📊 Calculating Queue KPIs for {}/{}", tenantCode, cafeteriaCode);
 
         try {
-            LocalDateTime startTime = getCurrentDayStart();
-            LocalDateTime endTime = getCurrentDayEnd();
+            LocalDateTime startTime = LocalDateTime.of(LocalDate.now(), LocalTime.of(7, 0));
+            LocalDateTime endTime = LocalDateTime.now();
 
             // Get all three datasets
             CounterQueueComparisonDTO.Response queueComparison = getAverageQueueComparison(tenantCode, cafeteriaCode);
