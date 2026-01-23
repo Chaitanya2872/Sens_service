@@ -316,6 +316,100 @@ ORDER BY fc.counterName
             @Param("startTime") LocalDateTime startTime
     );
 
+    // Add this method to CafeteriaAnalyticsRepository.java
+
+    /**
+     * ✅ Get master data for all counters with latest analytics
+     * Returns comprehensive data for reporting/export
+     */
+    // Add these methods to CafeteriaAnalyticsRepository.java
+
+    /**
+     * ✅ Get master data for all counters with latest analytics
+     * Returns comprehensive data for reporting/export
+     */
+    @Query("""
+    SELECT 
+        fc.id,
+        fc.counterName,
+        fc.counterCode,
+        fc.counterType,
+        fc.deviceId,
+        cl.cafeteriaName,
+        cl.cafeteriaCode,
+        cl.floor,
+        cl.zone,
+        ca.timestamp,
+        ca.currentOccupancy,
+        ca.capacity,
+        ca.occupancyPercentage,
+        ca.avgDwellTime,
+        ca.estimatedWaitTime,
+        ca.manualWaitTime,
+        ca.queueLength,
+        ca.congestionLevel,
+        ca.serviceStatus,
+        ca.inCount,
+        ca.maxDwellTime,
+        fc.active
+    FROM CafeteriaAnalytics ca
+    JOIN ca.foodCounter fc
+    JOIN ca.cafeteriaLocation cl
+    WHERE cl.id = :cafeteriaLocationId
+    AND ca.timestamp >= :startTime
+    AND ca.timestamp <= :endTime
+    ORDER BY ca.timestamp DESC, fc.counterName ASC
+""")
+    List<Object[]> getMasterDataForCounters(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     * ✅ Get latest master data for all counters (one record per counter)
+     */
+    @Query("""
+    SELECT 
+        fc.id,
+        fc.counterName,
+        fc.counterCode,
+        fc.counterType,
+        fc.deviceId,
+        cl.cafeteriaName,
+        cl.cafeteriaCode,
+        cl.floor,
+        cl.zone,
+        ca.timestamp,
+        ca.currentOccupancy,
+        ca.capacity,
+        ca.occupancyPercentage,
+        ca.avgDwellTime,
+        ca.estimatedWaitTime,
+        ca.manualWaitTime,
+        ca.queueLength,
+        ca.congestionLevel,
+        ca.serviceStatus,
+        ca.inCount,
+        ca.maxDwellTime,
+        fc.active
+    FROM CafeteriaAnalytics ca
+    JOIN ca.foodCounter fc
+    JOIN ca.cafeteriaLocation cl
+    WHERE cl.id = :cafeteriaLocationId
+    AND ca.id IN (
+        SELECT MAX(ca2.id)
+        FROM CafeteriaAnalytics ca2
+        WHERE ca2.foodCounter.id = fc.id
+        AND ca2.timestamp >= :startTime
+    )
+    ORDER BY fc.counterName ASC
+""")
+    List<Object[]> getLatestMasterDataForAllCounters(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime
+    );
+
     // ==================== TENANT-BASED QUERIES ====================
 
     @Query("""
@@ -329,6 +423,116 @@ ORDER BY fc.counterName
             @Param("tenantCode") String tenantCode,
             @Param("cafeteriaCode") String cafeteriaCode,
             @Param("startTime") LocalDateTime startTime
+    );
+
+
+    // Add these methods to CafeteriaAnalyticsRepository.java
+
+// ==================== QUEUE ANALYSIS METHODS ====================
+
+    /**
+     * ✅ Get average queue length per counter for comparison chart
+     */
+    @Query("""
+    SELECT
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.queueLength) as avgQueue,
+      MAX(c.queueLength) as maxQueue,
+      MIN(c.queueLength) as minQueue,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.queueLength IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY avgQueue DESC
+""")
+    List<Object[]> getAverageQueueComparison(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     * ✅ Get congestion rate per counter (percentage of time in each congestion level)
+     */
+    @Query("""
+    SELECT
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      c.congestionLevel,
+      COUNT(c) as recordCount
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.congestionLevel IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY c.foodCounter.id, c.foodCounter.counterName, c.congestionLevel
+    ORDER BY c.foodCounter.counterName, c.congestionLevel
+""")
+    List<Object[]> getCongestionRateByCounter(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     /**
+     * ✅ FIXED: PostgreSQL-compatible queue length time series
+     */
+    @Query("""
+    SELECT
+      TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI') as timeBucket,
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.queueLength) as avgQueue,
+      MAX(c.queueLength) as maxQueue,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.queueLength IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI'), c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY timeBucket, c.foodCounter.counterName
+""")
+    List<Object[]> getQueueLengthTimeSeries(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     * ✅ Alternative method for databases that don't support DATE_FORMAT
+     * Groups by extracting hour and minute separately
+     */
+    @Query("""
+    SELECT
+      EXTRACT(HOUR FROM c.timestamp) as hour,
+      (EXTRACT(MINUTE FROM c.timestamp) / 5) * 5 as minuteBucket,
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.queueLength) as avgQueue,
+      MAX(c.queueLength) as maxQueue,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.queueLength IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY hour, minuteBucket, c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY hour, minuteBucket, c.foodCounter.counterName
+""")
+    List<Object[]> getQueueLengthTimeSeriesAlternative(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
     );
 
     // Add this method to your CafeteriaAnalyticsRepository interface:
@@ -361,6 +565,114 @@ ORDER BY fc.counterName
             @Param("endTime") LocalDateTime endTime
     );
 
+    /**
+     * ✅ FIXED: PostgreSQL-compatible in_count time series
+     */
+    @Query("""
+    SELECT
+      TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI') as timeBucket,
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.inCount) as avgInCount,
+      MAX(c.inCount) as maxInCount,
+      SUM(c.inCount) as totalInCount,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.inCount IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI'), c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY timeBucket, c.foodCounter.counterName
+""")
+    List<Object[]> getInCountTimeSeries(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     * ✅ Alternative in_count time series (for databases without DATE_FORMAT)
+     */
+    @Query("""
+    SELECT
+      EXTRACT(HOUR FROM c.timestamp) as hour,
+      (EXTRACT(MINUTE FROM c.timestamp) / :intervalMinutes) * :intervalMinutes as minuteBucket,
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.inCount) as avgInCount,
+      MAX(c.inCount) as maxInCount,
+      SUM(c.inCount) as totalInCount,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.inCount IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY hour, minuteBucket, c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY hour, minuteBucket, c.foodCounter.counterName
+""")
+    List<Object[]> getInCountTimeSeriesAlternative(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime,
+            @Param("intervalMinutes") Integer intervalMinutes
+    );
+
+    /**
+     * ✅ Get average in_count per counter (for comparison chart)
+     */
+    @Query("""
+    SELECT
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.inCount) as avgInCount,
+      MAX(c.inCount) as maxInCount,
+      MIN(c.inCount) as minInCount,
+      SUM(c.inCount) as totalInCount,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.inCount IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY avgInCount DESC
+""")
+    List<Object[]> getAverageInCountComparison(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
+
+    /**
+     * ✅ FIXED: PostgreSQL-compatible occupancy time series
+     */
+    @Query("""
+    SELECT
+      TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI') as timeBucket,
+      c.foodCounter.id,
+      c.foodCounter.counterName,
+      AVG(c.currentOccupancy) as avgOccupancy,
+      MAX(c.currentOccupancy) as maxOccupancy,
+      COUNT(c) as dataPoints
+    FROM CafeteriaAnalytics c
+    WHERE c.cafeteriaLocation.id = :cafeteriaLocationId
+    AND c.foodCounter IS NOT NULL
+    AND c.currentOccupancy IS NOT NULL
+    AND c.timestamp >= :startTime
+    AND c.timestamp <= :endTime
+    GROUP BY TO_CHAR(c.timestamp, 'YYYY-MM-DD HH24:MI'), c.foodCounter.id, c.foodCounter.counterName
+    ORDER BY timeBucket, c.foodCounter.counterName
+""")
+    List<Object[]> getCurrentOccupancyTimeSeries(
+            @Param("cafeteriaLocationId") Long cafeteriaLocationId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
 
 
 

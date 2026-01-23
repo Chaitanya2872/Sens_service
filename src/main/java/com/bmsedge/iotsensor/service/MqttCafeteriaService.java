@@ -17,6 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -24,12 +27,15 @@ import java.util.Map;
 @Slf4j
 public class MqttCafeteriaService {
 
-    // ✅ CHANGED: Use constructor injection instead of @RequiredArgsConstructor
+    // ✅ India Standard Time timezone
+    private static final ZoneId IST_ZONE = ZoneId.of("Asia/Kolkata");
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+
     private final CafeteriaAnalyticsRepository analyticsRepository;
     private final FoodCounterRepository counterRepository;
     private final CafeteriaLocationRepository locationRepository;
     private final ObjectMapper objectMapper;
-    private final MqttMessageProcessor messageProcessor; // ✅ NEW: Separate processor
+    private final MqttMessageProcessor messageProcessor;
 
     public MqttCafeteriaService(
             CafeteriaAnalyticsRepository analyticsRepository,
@@ -68,6 +74,12 @@ public class MqttCafeteriaService {
     @PostConstruct
     public void init() {
         try {
+            // Log timezone on startup
+            log.info("🌍 Application timezone: {}", ZoneId.systemDefault());
+            log.info("🇮🇳 IST timezone configured: {}", IST_ZONE);
+            log.info("⏰ Current IST time: {}",
+                    ZonedDateTime.now(IST_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+
             initializeTopicMappings();
             connectToMqtt();
             subscribeToTopics();
@@ -118,7 +130,6 @@ public class MqttCafeteriaService {
 
             @Override
             public void messageArrived(String topic, MqttMessage message) throws Exception {
-                // ✅ CRITICAL: Call the @Transactional method in the separate Spring bean
                 String payload = new String(message.getPayload());
                 Long counterId = topicToCounterIdMap.get(topic);
 
@@ -145,6 +156,9 @@ public class MqttCafeteriaService {
         }
     }
 
+    /**
+     * ✅ FIXED: Publish test message with IST timestamp
+     */
     public void publishTestMessage(String deviceId) {
         try {
             String topic = null;
@@ -165,6 +179,9 @@ public class MqttCafeteriaService {
                 }
             }
 
+            // ✅ Use IST time for timestamp
+            String istTimestamp = ZonedDateTime.now(IST_ZONE).toLocalDateTime().format(ISO_FORMATTER);
+
             String testPayload = String.format("""
                 {
                     "occupancy": %d,
@@ -182,14 +199,15 @@ public class MqttCafeteriaService {
                     (int) (Math.random() * 50) + 10,
                     (Math.random() * 15 + 5) * 60,
                     (Math.random() * 10 + 5) * 60,
-                    LocalDateTime.now().toString()
+                    istTimestamp
             );
 
             MqttMessage message = new MqttMessage(testPayload.getBytes());
             message.setQos(1);
             mqttClient.publish(topic, message);
 
-            log.info("📤 Published test to topic '{}' for deviceId '{}'", topic, deviceId);
+            log.info("📤 Published test to topic '{}' for deviceId '{}' with IST timestamp: {}",
+                    topic, deviceId, istTimestamp);
 
         } catch (Exception e) {
             log.error("❌ Error publishing test message", e);
@@ -197,8 +215,14 @@ public class MqttCafeteriaService {
         }
     }
 
+    /**
+     * ✅ FIXED: Publish cafeteria-level test message with IST timestamp
+     */
     public void publishTestMessageCafeteriaLevel(String cafeteriaCode) {
         try {
+            // ✅ Use IST time for timestamp
+            String istTimestamp = ZonedDateTime.now(IST_ZONE).toLocalDateTime().format(ISO_FORMATTER);
+
             String testPayload = String.format("""
                 {
                     "occupancy": %d,
@@ -218,14 +242,14 @@ public class MqttCafeteriaService {
                     (Math.random() * 15 + 5) * 60,
                     (Math.random() * 10 + 5) * 60,
                     cafeteriaCode != null ? cafeteriaCode : defaultCafeteriaCode,
-                    LocalDateTime.now().toString()
+                    istTimestamp
             );
 
             MqttMessage message = new MqttMessage(testPayload.getBytes());
             message.setQos(1);
             mqttClient.publish(baseTopic, message);
 
-            log.info("📤 Published cafeteria-level test message");
+            log.info("📤 Published cafeteria-level test message with IST timestamp: {}", istTimestamp);
         } catch (Exception e) {
             log.error("❌ Error publishing test message", e);
         }
